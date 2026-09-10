@@ -14,9 +14,13 @@ from extraction.gemini_vision import extract_label_data
 from extraction.ocr import extract_text_ocr
 from extraction.evidence_fusion import fuse_evidence
 from engine.evaluator import evaluate_rules
+from database.inspections import init_db, save_inspection, get_all_inspections, get_inspection_by_id
 
 app = Flask(__name__)
-CORS(app)  # allows requests from any origin — fine for a hackathon build
+CORS(app)
+
+# Make sure the inspections table exists before the app starts taking requests
+init_db()
 
 # Folder where uploaded images get temporarily saved before processing
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
@@ -33,12 +37,11 @@ def _allowed_file(filename: str) -> bool:
 def scan_label():
     """
     Expects a multipart/form-data POST request with an image file
-    under the field name "image" (this is what your frontend's
-    FormData upload should use as the key).
+    under the field name "image".
 
-    Returns a full compliance report as JSON.
+    Runs the full pipeline, saves the result to the database, and
+    returns the compliance report as JSON.
     """
-    # Step 1: Make sure an image was actually sent
     if "image" not in request.files:
         return jsonify({"error": "No image file provided. Use form field name 'image'."}), 400
 
@@ -50,22 +53,22 @@ def scan_label():
     if not _allowed_file(image_file.filename):
         return jsonify({"error": "Unsupported file type. Use jpg, jpeg, png, or webp."}), 400
 
-    # Step 2: Save the uploaded image temporarily with a unique name
-    # (so two people scanning at the same time don't overwrite each other's file)
     file_extension = image_file.filename.rsplit(".", 1)[1].lower()
     temp_filename = f"{uuid.uuid4()}.{file_extension}"
     temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
     image_file.save(temp_path)
 
     try:
-        # Step 3: Run the full pipeline — extraction, fusion, rule evaluation
         gemini_result = extract_label_data(temp_path)
         ocr_result = extract_text_ocr(temp_path)
         fused_evidence = fuse_evidence(gemini_result, ocr_result)
         compliance_report = evaluate_rules(fused_evidence)
 
-        # Step 4: Build the final response your frontend will receive
+        # NEW: save this real scan to the database, and grab its new id
+        inspection_id = save_inspection(fused_evidence, compliance_report)
+
         response = {
+            "inspection_id": inspection_id,
             "extracted_data": fused_evidence,
             "compliance_report": compliance_report
         }
@@ -76,14 +79,37 @@ def scan_label():
         return jsonify({"error": f"Processing failed: {str(e)}"}), 500
 
     finally:
-        # Step 5: Clean up — delete the temp image whether it succeeded or failed
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
 
+@app.route("/inspections", methods=["GET"])
+def list_inspections():
+    """
+    Returns a summary list of every past scan (most recent first).
+    Does NOT include the full extracted_data/compliance_report —
+    use GET /inspections/<id> for full detail on one specific scan.
+    """
+    inspections = get_all_inspections()
+    return jsonify({"inspections": inspections}), 200
+
+
+@app.route("/inspections/<int:inspection_id>", methods=["GET"])
+def get_inspection(inspection_id):
+    """
+    Returns full detail (extracted_data + compliance_report included)
+    for one specific past scan, by its id.
+    """
+    inspection = get_inspection_by_id(inspection_id)
+
+    if inspection is None:
+        return jsonify({"error": f"No inspection found with id {inspection_id}"}), 404
+
+    return jsonify(inspection), 200
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
-    """Simple endpoint to confirm the server is running — useful for your frontend to ping on load."""
     return jsonify({"status": "ok"}), 200
 
 
