@@ -1,2 +1,18 @@
-#local env file
-.env 
+node_modules/
+dist/
+build/
+.cache/
+.env
+.env*
+.vite/
+vite.config.*.timestamp-*
+*.tsbuildinfo
+*-debug.log*
+logs/
+*.log
+.claude-replay.*
+.tmp-*
+/.figma/design-context/
+
+/.plugins/
+/.opencode-skills/

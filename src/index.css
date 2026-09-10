@@ -1,0 +1,95 @@
+@import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --color-background: #FFFFFF;
+  --color-foreground: #0F172A;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #0F172A;
+  --color-primary: #1D4ED8;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F1F5F9;
+  --color-secondary-foreground: #0F172A;
+  --color-muted: #F8FAFC;
+  --color-muted-foreground: #64748B;
+  --color-accent: #0EA5E9;
+  --color-accent-foreground: #FFFFFF;
+  --color-border: #E2E8F0;
+  --color-ring: #1D4ED8;
+  --color-compliant: #15803D;
+  --color-compliant-bg: #F0FDF4;
+  --color-compliant-border: #BBF7D0;
+  --color-violation: #B91C1C;
+  --color-violation-bg: #FEF2F2;
+  --color-violation-border: #FECACA;
+  --color-warning: #B45309;
+  --color-warning-bg: #FFFBEB;
+  --color-warning-border: #FDE68A;
+  --radius: 0.375rem;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Work Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  background: #FFFFFF;
+  color: #0F172A;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.font-display {
+  font-family: 'Work Sans', system-ui, sans-serif;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.slide-up {
+  animation: slideUp 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
