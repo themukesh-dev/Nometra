@@ -12,32 +12,56 @@ const SIDES: { side: PackageSide; label: string }[] = [
 ];
 
 export default function NewInspectionScreen() {
-  const { navigate, currentInspection, capturedSides, setCapturedSides } = useApp();
+  const {
+    navigate,
+    currentInspection,
+    capturedSides,
+    setCapturedSides,
+  } = useApp();
 
   const hasFront = capturedSides.includes('FRONT');
   const canProceed = capturedSides.length > 0;
 
+  const productName = currentInspection?.product.name?.trim();
+
   return (
     <MobileShell title="New Inspection" backScreen="dashboard">
       <div className="px-4 pb-6 pt-4">
+
         {/* Inspection ID */}
         <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5">
-          <p className="text-xs text-slate-500 mb-0.5">Inspection ID</p>
-          <p className="font-mono font-medium text-slate-900 text-sm">{currentInspection?.id ?? 'INS-2026-00148'}</p>
+          <p className="text-xs text-slate-500 mb-0.5">
+            Inspection ID
+          </p>
+
+          <p className="font-mono font-medium text-slate-900 text-sm">
+            {currentInspection?.id ?? 'INS-2026-00148'}
+          </p>
         </div>
 
         {/* Product info */}
-        {currentInspection && (
+        {currentInspection && productName && (
           <div className="bg-white border border-slate-200 rounded-xl px-4 py-3.5 mb-5">
-            <p className="text-xs text-slate-500 mb-0.5">Product</p>
-            <p className="font-medium text-slate-900 text-sm">{currentInspection.product.name}</p>
-            <p className="text-xs text-slate-400 mt-0.5">{currentInspection.product.category}</p>
+            <p className="text-xs text-slate-500 mb-0.5">
+              Product
+            </p>
+
+            <p className="font-medium text-slate-900 text-sm">
+              {productName}
+            </p>
+
+            <p className="text-xs text-slate-400 mt-0.5">
+              {currentInspection.product.category}
+            </p>
           </div>
         )}
 
         {/* Capture section */}
         <div className="mb-5">
-          <h3 className="font-display font-semibold text-slate-900 mb-1">Capture Package</h3>
+          <h3 className="font-display font-semibold text-slate-900 mb-1">
+            Capture Package
+          </h3>
+
           <p className="text-sm text-slate-500 mb-4">
             Capture multiple sides of the package. A declaration missing from one image may be present on another panel.
           </p>
@@ -46,14 +70,22 @@ export default function NewInspectionScreen() {
           <div className="flex flex-wrap gap-2 mb-4">
             {SIDES.map(({ side, label }) => {
               const captured = capturedSides.includes(side);
+
               return (
                 <button
                   key={side}
                   onClick={() => {
                     if (captured) {
-                      setCapturedSides(capturedSides.filter(s => s !== side));
+                      setCapturedSides(
+                        capturedSides.filter(
+                          s => s !== side
+                        )
+                      );
                     } else {
-                      setCapturedSides([...capturedSides, side]);
+                      setCapturedSides([
+                        ...capturedSides,
+                        side,
+                      ]);
                     }
                   }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
@@ -62,7 +94,12 @@ export default function NewInspectionScreen() {
                       : 'bg-white border-slate-200 text-slate-600'
                   }`}
                 >
-                  {captured ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                  {captured ? (
+                    <CheckCircle2 size={14} />
+                  ) : (
+                    <Circle size={14} />
+                  )}
+
                   {label}
                 </button>
               );
@@ -70,14 +107,18 @@ export default function NewInspectionScreen() {
           </div>
 
           {/* Notice about missing declarations */}
-          {hasFront && !capturedSides.includes('BACK') && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
-              <p className="text-amber-800 text-sm font-medium">Back panel not captured</p>
-              <p className="text-amber-700 text-xs mt-0.5">
-                Declarations such as MRP, consumer care, and country of origin may appear on the back panel. Capture it before proceeding.
-              </p>
-            </div>
-          )}
+          {hasFront &&
+            !capturedSides.includes('BACK') && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
+                <p className="text-amber-800 text-sm font-medium">
+                  Back panel not captured
+                </p>
+
+                <p className="text-amber-700 text-xs mt-0.5">
+                  Declarations such as MRP, consumer care, and country of origin may appear on the back panel. Capture it before proceeding.
+                </p>
+              </div>
+            )}
         </div>
 
         {/* Capture buttons */}
@@ -88,6 +129,7 @@ export default function NewInspectionScreen() {
           <Camera size={20} />
           Scan Product
         </button>
+
         <button
           onClick={() => {
             setCapturedSides(['FRONT', 'BACK']);

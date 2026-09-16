@@ -1,18 +1,77 @@
+# =========================
+# SECRETS / ENVIRONMENT
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# FRONTEND - NODE / VITE
+# =========================
 node_modules/
 dist/
 build/
-.cache/
-.env
-.env*
 .vite/
-vite.config.*.timestamp-*
-*.tsbuildinfo
-*-debug.log*
-logs/
-*.log
-.claude-replay.*
-.tmp-*
-/.figma/design-context/
+.cache/
 
-/.plugins/
-/.opencode-skills/
+# TypeScript / Vite generated files
+*.tsbuildinfo
+vite.config.*.timestamp-*
+
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# =========================
+# LOGS / TEMP FILES
+# =========================
+*.log
+logs/
+.tmp/
+tmp/
+*.tmp
+
+# =========================
+# DATABASE
+# =========================
+
+# Ignore SQLite database if it contains local/demo inspection data
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# IDE / EDITOR
+# =========================
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+.idea/
+*.iml
+
+# =========================
+# OS FILES
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# PYTHON TEST / CACHE
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# GENERATED REPORTS
+# =========================
+inspection_*.pdf

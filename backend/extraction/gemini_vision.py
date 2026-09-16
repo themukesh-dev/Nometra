@@ -37,24 +37,44 @@ IMPORTANT RULES:
 3. If information is clearly visible, extract it.
 4. Preserve values as printed whenever possible.
 5. Distinguish product information from packaging-material information.
-6. Pay special attention to MRP, quantity, manufacturing date, contact
-   details, and country-of-origin statements.
+6. Pay special attention to the product name, MRP, quantity, manufacturing
+   date, contact details, and country-of-origin statements.
 7. Promotional quantity expressions such as
    "140 g + 50 g FREE = 190 g" should be preserved exactly.
 8. "MADE IN INDIA" or "PRODUCT OF INDIA" means country_of_origin is "India".
 
+
 FIELDS:
+
+"product_name":
+Identify the name of the packaged retail product shown on the package.
+
+Use the actual product name/description printed on the product packaging,
+not the brand name alone and not the manufacturer name.
+
+Examples:
+"Premium Face Moisturiser SPF 30" → "Premium Face Moisturiser SPF 30"
+"Toor Dal 1 kg" → "Toor Dal 1 kg"
+
+If multiple product-related phrases are visible, choose the clearest
+primary product name.
+
+Do NOT guess.
+Return null if the product name cannot be confidently identified.
+
 
 "mrp":
 Maximum Retail Price exactly as printed.
 Example: "₹ 10.00"
 Return null if not visible.
 
+
 "net_quantity":
 Net quantity/weight/volume exactly as printed.
 If a promotional quantity is shown, preserve the complete expression.
 Example: "140 g + 50 g FREE = 190 g"
 Return null if not visible.
+
 
 "manufacturer_name":
 Identify the manufacturer, packer, or marketer of THE PRODUCT.
@@ -66,16 +86,19 @@ as the product manufacturer.
 
 If the manufacturer cannot be confidently identified, return null.
 
+
 "manufacturer_address":
 Full address belonging to the product manufacturer, packer, or marketer.
 Do not use an address belonging only to a packaging-material manufacturer.
 Return null if not visible or not confidently identifiable.
+
 
 "consumer_care":
 Consumer-care contact information, including phone number, email,
 complaint contact, or consumer service address.
 Preserve the visible contact information.
 Return null if not visible.
+
 
 "date_of_manufacture":
 Manufacturing, packing, or MFD date exactly as printed.
@@ -84,6 +107,7 @@ Examples:
 "MFD 08/2026"
 "PKD 08/2026"
 Return null if not visible.
+
 
 "country_of_origin":
 Extract the country ONLY when it is explicitly stated on the package.
@@ -98,6 +122,7 @@ brand, or other information.
 
 Return null if no explicit country-of-origin statement is visible.
 
+
 OUTPUT FORMAT:
 
 Return ONLY valid JSON.
@@ -108,6 +133,7 @@ Do not add explanations.
 Return exactly:
 
 {
+  "product_name": null,
   "mrp": null,
   "net_quantity": null,
   "manufacturer_name": null,
@@ -116,7 +142,7 @@ Return exactly:
   "date_of_manufacture": null,
   "country_of_origin": null
 }
-""" 
+"""
 
 
 def extract_label_data(image_path: str) -> dict:

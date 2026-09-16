@@ -1,105 +1,271 @@
-import { CheckCircle2, XCircle, AlertTriangle, Camera } from 'lucide-react';
+import {
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  MinusCircle,
+  Camera,
+} from 'lucide-react';
 import MobileShell from '../components/MobileShell';
 import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
+import type { ComplianceStatus } from '../types';
 
 export default function ComplianceResultScreen() {
-  const { navigate, currentInspection } = useApp();
+  const { navigate, backendResult } = useApp();
 
-  const findings = currentInspection?.findings ?? [];
-  const overallStatus = currentInspection?.overallStatus ?? 'VERIFICATION_REQUIRED';
+  /*
+   * Real backend result
+   */
+  const report = backendResult?.compliance_report;
+  const results = report?.results ?? [];
 
-  const criticalFindings = findings.filter(f =>
-    f.status === 'NON_COMPLIANT' || (f.status === 'VERIFICATION_REQUIRED' && f.reviewRequired)
+  /*
+   * Convert backend statuses into the statuses
+   * expected by the existing UI.
+   *
+   * PASS             -> COMPLIANT
+   * FAIL             -> NON_COMPLIANT
+   * NOT_APPLICABLE   -> COMPLIANT for UI purposes
+   *
+   * NOT_APPLICABLE is kept separately as
+   * originalStatus so the Rule Evaluation section
+   * can still display "NOT_APPLICABLE".
+   */
+  const findings = results.map((result) => {
+    const status: ComplianceStatus =
+      result.status === 'PASS'
+        ? 'COMPLIANT'
+        : result.status === 'FAIL'
+        ? 'NON_COMPLIANT'
+        : 'COMPLIANT';
+
+    return {
+      id: result.rule_id,
+      requirementId: result.rule_id,
+      status,
+      explanation: result.reason,
+      evidenceIds: [] as string[],
+      recommendation:
+        result.status === 'FAIL'
+          ? 'Review this declaration on the package and verify it manually.'
+          : undefined,
+      reviewRequired: false,
+      description: result.description,
+      legalReference: result.legal_reference,
+      field: result.field,
+      extractedValue: result.extracted_value,
+      verifiedByOcr: result.verified_by_ocr,
+      originalStatus: result.status,
+    };
+  });
+
+  /*
+   * Overall status comes directly from the backend.
+   */
+  const overallStatus: ComplianceStatus =
+    report?.overall_status === 'COMPLIANT'
+      ? 'COMPLIANT'
+      : report?.overall_status === 'NON_COMPLIANT'
+      ? 'NON_COMPLIANT'
+      : 'VERIFICATION_REQUIRED';
+
+  /*
+   * Only actual NON_COMPLIANT findings should
+   * appear under "Findings Requiring Attention".
+   *
+   * NOT_APPLICABLE is deliberately excluded.
+   */
+  const criticalFindings = findings.filter(
+    (finding) => finding.status === 'NON_COMPLIANT'
   );
-
-  const reqs = currentInspection?.applicableRequirements ?? [];
-  const evidence = currentInspection?.evidence ?? [];
-
-  const getReqName = (requirementId: string) =>
-    reqs.find(r => r.id === requirementId)?.name ?? requirementId;
-
-  const getEvidenceValue = (evidenceIds: string[]) =>
-    evidence.filter(e => evidenceIds.includes(e.id)).map(e => `${e.label}: ${e.value}`).join(' · ');
 
   const statusConfig = {
     COMPLIANT: {
       bg: 'bg-emerald-600',
       icon: <CheckCircle2 size={36} className="text-white" />,
       title: 'Compliant',
-      subtitle: 'All mandatory requirements satisfied.',
+      subtitle: 'All checked mandatory requirements satisfied.',
     },
+
     NON_COMPLIANT: {
       bg: 'bg-red-600',
       icon: <XCircle size={36} className="text-white" />,
       title: 'Non-Compliant',
-      subtitle: 'Potential violations detected. Inspector review required.',
+      subtitle:
+        'Potential violations detected. Inspector review required.',
     },
+
     VERIFICATION_REQUIRED: {
       bg: 'bg-amber-500',
       icon: <AlertTriangle size={36} className="text-white" />,
       title: 'Verification Required',
-      subtitle: 'Insufficient evidence for final determination.',
+      subtitle:
+        'Insufficient evidence for final determination.',
     },
   };
 
   const cfg = statusConfig[overallStatus];
 
+  /*
+   * If the user somehow reaches this screen
+   * without a backend result.
+   */
+  if (!backendResult || !report) {
+    return (
+      <MobileShell
+        title="Compliance Result"
+        backScreen="analysis"
+      >
+        <div className="px-4 pt-8">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-center">
+            <AlertTriangle
+              size={32}
+              className="text-amber-600 mx-auto mb-3"
+            />
+
+            <h2 className="font-display font-bold text-slate-900">
+              No Analysis Result
+            </h2>
+
+            <p className="text-sm text-slate-600 mt-2">
+              No backend compliance result is available yet.
+            </p>
+          </div>
+
+          <button
+            onClick={() => navigate('capture')}
+            className="w-full h-12 bg-blue-700 text-white font-display font-semibold rounded-xl mt-5"
+          >
+            Start Inspection
+          </button>
+        </div>
+      </MobileShell>
+    );
+  }
+
   return (
-    <MobileShell title="Compliance Result" backScreen="requirements">
+    <MobileShell
+      title="Compliance Result"
+      backScreen="analysis"
+    >
       <div className="pb-6">
+
         {/* Status header */}
         <div className={`${cfg.bg} px-4 pt-6 pb-8`}>
           <div className="flex flex-col items-center text-center">
             {cfg.icon}
-            <h2 className="font-display font-bold text-2xl text-white mt-2">{cfg.title}</h2>
-            <p className="text-white/80 text-sm mt-1">{cfg.subtitle}</p>
+
+            <h2 className="font-display font-bold text-2xl text-white mt-2">
+              {cfg.title}
+            </h2>
+
+            <p className="text-white/80 text-sm mt-1">
+              {cfg.subtitle}
+            </p>
           </div>
 
           {/* Stats bar */}
           <div className="flex gap-2 mt-5">
             {[
-              { label: 'Compliant', count: findings.filter(f => f.status === 'COMPLIANT').length, color: 'bg-white/20 text-white' },
-              { label: 'Non-Compliant', count: findings.filter(f => f.status === 'NON_COMPLIANT').length, color: 'bg-white/20 text-white' },
-              { label: 'Review', count: findings.filter(f => f.status === 'VERIFICATION_REQUIRED').length, color: 'bg-white/20 text-white' },
-            ].map(s => (
-              <div key={s.label} className={`flex-1 rounded-xl py-2.5 text-center ${s.color}`}>
-                <p className="font-display font-bold text-xl">{s.count}</p>
-                <p className="text-[10px] font-medium">{s.label}</p>
+              {
+                label: 'Passed',
+                count: report.passed,
+              },
+              {
+                label: 'Failed',
+                count: report.failed,
+              },
+              {
+                label: 'N/A',
+                count: results.filter(
+                  (r) => r.status === 'NOT_APPLICABLE'
+                ).length,
+              },
+            ].map((s) => (
+              <div
+                key={s.label}
+                className="flex-1 rounded-xl py-2.5 text-center bg-white/20 text-white"
+              >
+                <p className="font-display font-bold text-xl">
+                  {s.count}
+                </p>
+
+                <p className="text-[10px] font-medium">
+                  {s.label}
+                </p>
               </div>
             ))}
           </div>
         </div>
 
         <div className="px-4 pt-4">
+
+          {/* Inspection information */}
+          <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 mb-5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">
+                Inspection ID
+              </span>
+
+              <span className="text-sm font-semibold text-slate-900">
+                #{backendResult.inspection_id}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-xs text-slate-500">
+                Rules checked
+              </span>
+
+              <span className="text-sm font-semibold text-slate-900">
+                {report.total_rules_checked}
+              </span>
+            </div>
+          </div>
+
           {/* Critical findings */}
           {criticalFindings.length > 0 && (
             <div className="mb-5">
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
                 Findings Requiring Attention
               </p>
+
               <div className="flex flex-col gap-3">
-                {criticalFindings.map(finding => (
+                {criticalFindings.map((finding) => (
                   <div
                     key={finding.id}
-                    className={`rounded-xl border px-4 py-3.5 ${
-                      finding.status === 'NON_COMPLIANT'
-                        ? 'bg-red-50 border-red-200'
-                        : 'bg-amber-50 border-amber-200'
-                    }`}
+                    className="rounded-xl border px-4 py-3.5 bg-red-50 border-red-200"
                   >
                     <div className="flex items-start justify-between gap-2 mb-1.5">
                       <p className="font-display font-semibold text-sm text-slate-900">
-                        {getReqName(finding.requirementId)}
+                        {finding.description}
                       </p>
-                      <StatusBadge status={finding.status} size="sm" />
+
+                      <StatusBadge
+                        status={finding.status}
+                        size="sm"
+                      />
                     </div>
-                    <p className="text-xs text-slate-600 mb-1.5">{finding.explanation}</p>
-                    {getEvidenceValue(finding.evidenceIds) && (
-                      <p className="text-xs text-slate-500 font-medium">Evidence: {getEvidenceValue(finding.evidenceIds)}</p>
+
+                    <p className="text-xs text-slate-600 mb-1.5">
+                      {finding.explanation}
+                    </p>
+
+                    {finding.extractedValue && (
+                      <p className="text-xs text-slate-500 font-medium">
+                        Extracted value:{' '}
+                        {finding.extractedValue}
+                      </p>
                     )}
+
+                    <p className="text-[11px] text-slate-400 mt-2">
+                      {finding.legalReference}
+                    </p>
+
                     {finding.recommendation && (
-                      <p className="text-xs text-blue-700 mt-1.5 font-medium">{finding.recommendation}</p>
+                      <p className="text-xs text-blue-700 mt-1.5 font-medium">
+                        {finding.recommendation}
+                      </p>
                     )}
                   </div>
                 ))}
@@ -107,30 +273,120 @@ export default function ComplianceResultScreen() {
             </div>
           )}
 
-          {/* Important caveat */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5">
-            <p className="text-slate-700 text-sm font-medium">Final determination by inspector</p>
-            <p className="text-slate-500 text-xs mt-0.5">
-              This is a system assessment based on available evidence. The inspector must review findings and make the final compliance determination.
+          {/* All rule results */}
+          <div className="mb-5">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+              Rule Evaluation
             </p>
+
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              {results.map((result, index) => {
+                const isPass = result.status === 'PASS';
+                const isFail = result.status === 'FAIL';
+                const isNotApplicable =
+                  result.status === 'NOT_APPLICABLE';
+
+                return (
+                  <div
+                    key={result.rule_id}
+                    className={`px-4 py-3.5 ${
+                      index < results.length - 1
+                        ? 'border-b border-slate-100'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+
+                      {/* Rule status icon */}
+                      <div className="shrink-0 mt-0.5">
+                        {isPass ? (
+                          <CheckCircle2
+                            size={18}
+                            className="text-emerald-500"
+                          />
+                        ) : isFail ? (
+                          <XCircle
+                            size={18}
+                            className="text-red-500"
+                          />
+                        ) : isNotApplicable ? (
+                          <MinusCircle
+                            size={18}
+                            className="text-slate-400"
+                          />
+                        ) : (
+                          <AlertTriangle
+                            size={18}
+                            className="text-amber-500"
+                          />
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">
+                            {result.description}
+                          </p>
+
+                          <span
+                            className={`text-[10px] font-bold shrink-0 ${
+                              isPass
+                                ? 'text-emerald-600'
+                                : isFail
+                                ? 'text-red-600'
+                                : isNotApplicable
+                                ? 'text-slate-500'
+                                : 'text-amber-600'
+                            }`}
+                          >
+                            {result.status}
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-slate-500 mt-1">
+                          {result.reason}
+                        </p>
+
+                        {result.extracted_value && (
+                          <p className="text-xs text-slate-600 mt-1.5">
+                            <span className="font-medium">
+                              Value:
+                            </span>{' '}
+                            {result.extracted_value}
+                          </p>
+                        )}
+
+                        <p className="text-[10px] text-slate-400 mt-1.5">
+                          {result.legal_reference}
+                        </p>
+
+                        {result.verified_by_ocr && (
+                          <p className="text-[10px] text-blue-600 mt-1 font-medium">
+                            ✓ Verified against OCR
+                          </p>
+                        )}
+
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Adaptive inspection prompt */}
-          {findings.some(f => f.status === 'VERIFICATION_REQUIRED') && (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3.5 mb-5">
-              <p className="text-blue-800 font-semibold text-sm mb-1">Additional evidence required</p>
-              <p className="text-blue-700 text-xs mb-3">
-                Some requirements could not be verified from the available images. Capturing additional panels may resolve these findings.
-              </p>
-              <button
-                onClick={() => navigate('capture')}
-                className="flex items-center gap-1.5 h-9 bg-blue-700 text-white text-sm font-semibold rounded-lg px-4"
-              >
-                <Camera size={14} />
-                Capture Additional Evidence
-              </button>
-            </div>
-          )}
+          {/* Important caveat */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5">
+            <p className="text-slate-700 text-sm font-medium">
+              Final determination by inspector
+            </p>
+
+            <p className="text-slate-500 text-xs mt-0.5">
+              This is a system assessment based on available
+              evidence. The inspector must review findings and
+              make the final compliance determination.
+            </p>
+          </div>
 
           {/* Actions */}
           <button
@@ -139,12 +395,14 @@ export default function ComplianceResultScreen() {
           >
             Inspector Review →
           </button>
+
           <button
             onClick={() => navigate('report')}
             className="w-full h-12 border border-slate-200 bg-white text-slate-700 font-display font-medium text-sm rounded-xl hover:bg-slate-50 transition-all"
           >
             Skip to Report
           </button>
+
         </div>
       </div>
     </MobileShell>
