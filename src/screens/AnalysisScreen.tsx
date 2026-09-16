@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import MobileShell from '../components/MobileShell';
 import { useApp } from '../context/AppContext';
@@ -38,6 +38,7 @@ export default function AnalysisScreen() {
   const {
     navigate,
     capturedImage,
+    currentInspection,
     setBackendResult,
     applyBackendResultToInspection,
     setAnalysisStep,
@@ -48,8 +49,12 @@ export default function AnalysisScreen() {
   const [backendFinished, setBackendFinished] = useState(false);
 
   /*
+   * Prevent duplicate backend scans for the same image.
+   */
+  const scanStartedRef = useRef(false);
+
+  /*
    * Visual progress only.
-   * The actual scan is handled separately below.
    */
   useEffect(() => {
     if (!capturedImage) return;
@@ -81,27 +86,84 @@ export default function AnalysisScreen() {
 
   /*
    * Actual backend scan.
+   *
+   * IMPORTANT:
+   * currentInspection is intentionally NOT included
+   * in the dependency array because applying the backend
+   * result updates currentInspection.
+   *
+   * scanStartedRef prevents duplicate requests.
    */
   useEffect(() => {
-    let cancelled = false;
+    if (!capturedImage) {
+      setError(
+        'No image was captured. Please return to Capture and select an image.'
+      );
+      return;
+    }
+
+    if (!currentInspection) {
+      setError(
+        'No active inspection was found. Please start a new inspection.'
+      );
+      return;
+    }
+
+    /*
+     * Prevent duplicate scans.
+     */
+    if (scanStartedRef.current) {
+      return;
+    }
+
+    scanStartedRef.current = true;
+
+    /*
+     * Snapshot classification before the backend result
+     * updates currentInspection.
+     */
+    const category =
+      currentInspection.product.category;
+
+    const origin =
+      currentInspection.product.isImported
+        ? 'imported'
+        : 'domestic';
+
+    const saleType =
+      currentInspection.product.saleType;
 
     const runScan = async () => {
-      setError(null);
-      setBackendFinished(false);
-
-      if (!capturedImage) {
-        setError(
-          'No image was captured. Please return to Capture and select an image.'
-        );
-        return;
-      }
-
       try {
+        setError(null);
+        setBackendFinished(false);
+
         const formData = new FormData();
 
+        /*
+         * Package image.
+         */
         formData.append(
           'image',
           capturedImage
+        );
+
+        /*
+         * Product classification.
+         */
+        formData.append(
+          'category',
+          category
+        );
+
+        formData.append(
+          'origin',
+          origin
+        );
+
+        formData.append(
+          'sale_type',
+          saleType
         );
 
         const response = await fetch(
@@ -121,8 +183,6 @@ export default function AnalysisScreen() {
           );
         }
 
-        if (cancelled) return;
-
         /*
          * Store complete backend response.
          */
@@ -131,14 +191,19 @@ export default function AnalysisScreen() {
         /*
          * Convert backend extraction + compliance
          * results into the current inspection.
-         *
-         * This replaces the old demo-data flow.
          */
         applyBackendResultToInspection(data);
 
+        /*
+         * Backend processing is now complete.
+         */
         setBackendFinished(true);
+
       } catch (err) {
-        if (cancelled) return;
+        /*
+         * Allow another attempt if the request fails.
+         */
+        scanStartedRef.current = false;
 
         const message =
           err instanceof Error
@@ -151,9 +216,16 @@ export default function AnalysisScreen() {
 
     runScan();
 
-    return () => {
-      cancelled = true;
-    };
+    /*
+     * IMPORTANT:
+     * Do not use a cancelled flag here.
+     *
+     * React Strict Mode can execute the effect,
+     * immediately clean it up, and execute it again.
+     *
+     * Cancelling the first request would cause the
+     * successful backend response to be ignored.
+     */
   }, [
     capturedImage,
     setBackendResult,
@@ -229,6 +301,7 @@ export default function AnalysisScreen() {
       <div className="px-4 pt-6 pb-8">
 
         {/* Header */}
+
         <div className="text-center mb-8">
           <div className="w-14 h-14 bg-blue-700 rounded-2xl mx-auto flex items-center justify-center">
             <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -251,6 +324,7 @@ export default function AnalysisScreen() {
         </div>
 
         {/* Progress list */}
+
         <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white">
 
           {STEPS.map((step, index) => {
@@ -317,8 +391,30 @@ export default function AnalysisScreen() {
 
         </div>
 
+        {/* Classification being sent */}
+
+        <div className="mt-5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+          <p className="text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">
+              Classification:
+            </span>{' '}
+            {currentInspection?.product.isImported
+              ? 'Imported'
+              : 'Domestic'}{' '}
+            ·{' '}
+            {currentInspection?.product.saleType ===
+            'institutional_or_industrial'
+              ? 'Institutional / Industrial'
+              : currentInspection?.product.saleType ===
+                'wholesale'
+              ? 'Wholesale'
+              : 'Retail'}
+          </p>
+        </div>
+
         {/* Backend status */}
-        <div className="text-center mt-6">
+
+        <div className="text-center mt-4">
           <p className="text-xs text-slate-400">
             {backendFinished
               ? 'Analysis completed'

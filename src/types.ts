@@ -1,6 +1,15 @@
-export type ComplianceStatus = 'COMPLIANT' | 'NON_COMPLIANT' | 'VERIFICATION_REQUIRED';
+export type ComplianceStatus =
+  | 'COMPLIANT'
+  | 'NON_COMPLIANT'
+  | 'VERIFICATION_REQUIRED';
 
-export type PackageSide = 'FRONT' | 'BACK' | 'LEFT' | 'RIGHT' | 'BOTTOM' | 'OTHER';
+export type PackageSide =
+  | 'FRONT'
+  | 'BACK'
+  | 'LEFT'
+  | 'RIGHT'
+  | 'BOTTOM'
+  | 'OTHER';
 
 export type ProductCategory =
   | 'Food & Grocery'
@@ -11,6 +20,11 @@ export type ProductCategory =
   | 'Consumer Goods'
   | 'Agricultural'
   | 'Other';
+
+export type SaleType =
+  | 'retail'
+  | 'wholesale'
+  | 'institutional_or_industrial';
 
 export interface PackageImage {
   id: string;
@@ -35,11 +49,24 @@ export interface Evidence {
   value: string;
   confidence: number;
   imageId: string;
-  boundingBox?: { x: number; y: number; w: number; h: number };
+  boundingBox?: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  };
   source: 'OCR' | 'VISION' | 'OCR+VISION' | 'MANUAL';
-  status: 'FOUND' | 'NOT_FOUND' | 'CONFLICTING' | 'UNCERTAIN';
+  status:
+    | 'FOUND'
+    | 'NOT_FOUND'
+    | 'CONFLICTING'
+    | 'UNCERTAIN';
   rawEvidence?: string;
-  conflictingValues?: { imageId: string; value: string; side: PackageSide }[];
+  conflictingValues?: {
+    imageId: string;
+    value: string;
+    side: PackageSide;
+  }[];
 }
 
 export interface Rule {
@@ -75,7 +102,11 @@ export interface Finding {
 
 export interface InspectorDecision {
   findingId: string;
-  decision: 'CONFIRM' | 'REJECT' | 'MODIFY' | 'REQUEST_EVIDENCE';
+  decision:
+    | 'CONFIRM'
+    | 'REJECT'
+    | 'MODIFY'
+    | 'REQUEST_EVIDENCE';
   notes: string;
   finalStatus: ComplianceStatus;
   decidedAt: string;
@@ -87,6 +118,7 @@ export interface Product {
   category: ProductCategory;
   brand: string;
   isImported: boolean;
+  saleType: SaleType;
   previousInspections?: number;
 }
 

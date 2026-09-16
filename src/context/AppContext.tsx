@@ -242,6 +242,7 @@ export function AppProvider({
         brand: '',
         category: 'Other',
         isImported: false,
+        saleType: 'retail',
         previousInspections: 0,
       },
 
