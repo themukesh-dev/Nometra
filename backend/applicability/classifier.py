@@ -4,110 +4,455 @@
 Resolves, for a given classification, which mandatory_declarations
 rules actually apply to a package and whether each is required.
 
-MANDATORY_DECLARATION_RULES (rules/packaged_commodities/mandatory_declarations.py)
-is deliberately classification-agnostic — it just lists every possible
-declaration rule with a static "required" flag. Two things it can't
-answer on its own:
+This module also exposes structured trace information so the compliance
+engine can explain HOW each rule reached its applicability/requirement
+decision.
 
-1. Is this rule exempted for this package? (wholesale/institutional
-   packages are exempted from some rules — see applicability/exceptions.py)
-2. For rules marked required=False because they're CONDITIONAL
-   (currently only LM-COO-01 / country_of_origin), is the condition
-   actually true for this package? (see applicability/conditions.py)
+Responsibilities:
 
-This module combines both to produce one resolved list the engine can
-iterate over without knowing about classification, exemptions, or
-conditions itself.
+1. Determine whether a rule is exempted for the package.
+2. Resolve conditional requirements.
+3. Return the resolved rule list.
+4. Provide trace metadata describing the decision path.
 
-Consumes:
-- rules.packaged_commodities.mandatory_declarations.MANDATORY_DECLARATION_RULES
-- applicability.exceptions.is_rule_exempt() / get_exemption_reason()
-- applicability.conditions.requires_country_of_origin()
-
-Does NOT run any "check" functions or evaluate a scanned package — that
-remains engine/evaluator.py's job. This module only resolves
-applicability/required-ness ahead of time.
+This module does NOT run rule check functions or evaluate scanned
+evidence. That remains engine/evaluator.py's responsibility.
 """
 
-from rules.packaged_commodities.mandatory_declarations import MANDATORY_DECLARATION_RULES
-from applicability.exceptions import is_rule_exempt, get_exemption_reason
-from applicability.conditions import requires_country_of_origin
+import os
+import sys
 
-# Rule IDs whose "required" flag is conditional rather than static, and
-# the predicate (from conditions.py) that resolves the condition for a
-# given classification. Currently only country_of_origin is conditional;
-# add future conditional rule IDs here rather than special-casing them
-# inline below.
+
+# --------------------------------------------------
+# Make this file runnable directly
+# --------------------------------------------------
+
+# When running:
+#     python applicability/classifier.py
+#
+# Python starts from the applicability/ directory.
+# Add the backend directory to sys.path so sibling
+# packages such as rules/, classification/, and
+# applicability/ can be imported correctly.
+
+BACKEND_DIR = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
+
+if BACKEND_DIR not in sys.path:
+    sys.path.append(BACKEND_DIR)
+
+
+# --------------------------------------------------
+# Imports
+# --------------------------------------------------
+
+from rules.packaged_commodities.mandatory_declarations import (
+    MANDATORY_DECLARATION_RULES,
+)
+
+from applicability.exceptions import (
+    is_rule_exempt,
+    get_exemption_reason,
+)
+
+from applicability.conditions import (
+    requires_country_of_origin,
+)
+
+
+# --------------------------------------------------
+# Conditional requirement resolvers
+# --------------------------------------------------
+
+# Rule IDs whose "required" value depends on the
+# package classification rather than the static
+# "required" value inside the rule definition.
+
 CONDITIONAL_REQUIRED_RESOLVERS = {
     "LM-COO-01": requires_country_of_origin,
 }
 
 
-def _resolve_required(rule: dict, classification: dict) -> bool:
+# Human-readable names for the conditional predicates.
+# These are used only for traceability/reporting.
+
+CONDITIONAL_REQUIRED_CONDITIONS = {
+    "LM-COO-01": "requires_country_of_origin",
+}
+
+
+# --------------------------------------------------
+# Required-status resolution
+# --------------------------------------------------
+
+def _resolve_required(
+    rule: dict,
+    classification: dict,
+) -> bool:
     """
-    Resolves whether a rule is actually required for this classification.
-    Static rules (required=True/False with no entry in
-    CONDITIONAL_REQUIRED_RESOLVERS) just return their static flag.
-    Conditional rules defer to their resolver predicate instead.
+    Resolves whether a rule is actually required for
+    the supplied classification.
+
+    Static rules:
+        Return the rule's static "required" value.
+
+    Conditional rules:
+        Execute the registered resolver predicate.
     """
-    resolver = CONDITIONAL_REQUIRED_RESOLVERS.get(rule["id"])
+
+    resolver = CONDITIONAL_REQUIRED_RESOLVERS.get(
+        rule["id"]
+    )
+
     if resolver:
         return resolver(classification)
+
     return rule["required"]
 
 
-def get_applicable_rules(classification: dict) -> list:
-    """
-    Returns MANDATORY_DECLARATION_RULES augmented with classification-
-    resolved applicability, for a single package's classification.
+# --------------------------------------------------
+# Trace construction
+# --------------------------------------------------
 
-    Each item in the returned list has all the original rule keys
-    ("id", "field", "description", "legal_reference", "check") plus:
-        "applicable": bool   # False if exempted under Rule 3
-        "required": bool     # resolved required-ness (only meaningful
-                              # when applicable is True)
-        "exemption_reason": str | None
+def _build_trace(
+    rule: dict,
+    classification: dict,
+    applicable: bool,
+    required: bool,
+    exempt: bool,
+) -> dict:
     """
+    Builds structured trace information explaining
+    how applicability and required-ness were resolved.
+
+    This does not perform any compliance check.
+    It only records the classification decision path.
+    """
+
+    trace = {
+        "classification": {
+            "commodity_type": classification.get(
+                "commodity_type"
+            ),
+            "origin": classification.get(
+                "origin"
+            ),
+            "sale_type": classification.get(
+                "sale_type"
+            ),
+        },
+
+        "applicability": {
+            "applicable": applicable,
+            "exempted": exempt,
+        },
+
+        "requirement": {
+            "required": required,
+        },
+    }
+
+
+    # --------------------------------------------------
+    # Exemption trace
+    # --------------------------------------------------
+
+    if exempt:
+
+        trace["applicability"]["decision_source"] = (
+            "applicability.exceptions.is_rule_exempt"
+        )
+
+        trace["applicability"]["decision"] = (
+            "Rule exempted for this classification."
+        )
+
+        trace["requirement"]["decision_source"] = (
+            "exemption"
+        )
+
+        trace["requirement"]["decision"] = (
+            "Requirement disabled because the rule "
+            "is exempted."
+        )
+
+        return trace
+
+
+    # --------------------------------------------------
+    # Conditional requirement trace
+    # --------------------------------------------------
+
+    condition_name = CONDITIONAL_REQUIRED_CONDITIONS.get(
+        rule["id"]
+    )
+
+    if condition_name:
+
+        trace["requirement"]["decision_source"] = (
+            "applicability.conditions."
+            + condition_name
+        )
+
+        trace["requirement"]["condition"] = (
+            condition_name
+        )
+
+        trace["requirement"]["condition_result"] = (
+            required
+        )
+
+        trace["requirement"]["decision"] = (
+            "Condition evaluated for package classification."
+        )
+
+    else:
+
+        trace["requirement"]["decision_source"] = (
+            "rule.required"
+        )
+
+        trace["requirement"]["decision"] = (
+            "Static requirement from rule definition."
+        )
+
+
+    # --------------------------------------------------
+    # Applicability trace for non-exempt rules
+    # --------------------------------------------------
+
+    trace["applicability"]["decision_source"] = (
+        "applicability.classifier"
+    )
+
+    trace["applicability"]["decision"] = (
+        "No exemption matched this rule."
+    )
+
+    return trace
+
+
+# --------------------------------------------------
+# Main applicability resolver
+# --------------------------------------------------
+
+def get_applicable_rules(
+    classification: dict,
+) -> list:
+    """
+    Returns MANDATORY_DECLARATION_RULES augmented with
+    classification-resolved applicability and requirement
+    information.
+
+    Each returned rule contains all original rule keys:
+
+        id
+        field
+        description
+        legal_reference
+        required
+        check
+
+    plus:
+
+        applicable
+        exemption_reason
+        trace
+
+    "trace" explains how the applicability and requirement
+    decisions were reached.
+    """
+
     resolved = []
 
+
     for rule in MANDATORY_DECLARATION_RULES:
-        exempt = is_rule_exempt(rule["id"], classification)
+
+        # --------------------------------------------------
+        # 1. Determine exemption
+        # --------------------------------------------------
+
+        exempt = is_rule_exempt(
+            rule["id"],
+            classification,
+        )
+
+        applicable = not exempt
+
+
+        # --------------------------------------------------
+        # 2. Resolve required status
+        # --------------------------------------------------
+
+        if exempt:
+
+            required = False
+
+        else:
+
+            required = _resolve_required(
+                rule,
+                classification,
+            )
+
+
+        # --------------------------------------------------
+        # 3. Resolve exemption reason
+        # --------------------------------------------------
+
+        exemption_reason = (
+            get_exemption_reason(
+                classification
+            )
+            if exempt
+            else None
+        )
+
+
+        # --------------------------------------------------
+        # 4. Build trace
+        # --------------------------------------------------
+
+        trace = _build_trace(
+            rule=rule,
+            classification=classification,
+            applicable=applicable,
+            required=required,
+            exempt=exempt,
+        )
+
+
+        # --------------------------------------------------
+        # 5. Return original rule + resolved metadata
+        # --------------------------------------------------
 
         resolved.append({
             **rule,
-            "applicable": not exempt,
-            "required": False if exempt else _resolve_required(rule, classification),
-            "exemption_reason": get_exemption_reason(classification) if exempt else None,
+
+            "applicable": applicable,
+
+            "required": required,
+
+            "exemption_reason": exemption_reason,
+
+            "trace": trace,
         })
+
 
     return resolved
 
 
-def get_applicable_required_rules(classification: dict) -> list:
+# --------------------------------------------------
+# Convenience filter
+# --------------------------------------------------
+
+def get_applicable_required_rules(
+    classification: dict,
+) -> list:
     """
-    Convenience filter: only the rules that are both applicable AND
-    required for this classification. This is the list the engine most
-    likely wants when deciding what actually constitutes a violation.
+    Returns only rules that are both applicable and
+    required for the supplied classification.
     """
+
     return [
-        rule for rule in get_applicable_rules(classification)
-        if rule["applicable"] and rule["required"]
+        rule
+        for rule in get_applicable_rules(
+            classification
+        )
+        if rule["applicable"]
+        and rule["required"]
     ]
 
 
-# Standalone test runner — same pattern as other modules in this project
+# --------------------------------------------------
+# Standalone test runner
+# --------------------------------------------------
+
 if __name__ == "__main__":
-    from classification.categories import build_classification
 
-    domestic_retail = build_classification(origin="domestic", sale_type="retail")
-    imported_retail = build_classification(origin="imported", sale_type="retail")
-    domestic_wholesale = build_classification(origin="domestic", sale_type="wholesale")
+    from classification.categories import (
+        build_classification
+    )
 
-    for label, classification in [
-        ("domestic_retail", domestic_retail),
-        ("imported_retail", imported_retail),
-        ("domestic_wholesale", domestic_wholesale),
-    ]:
-        print(f"--- {label} ---")
-        for rule in get_applicable_rules(classification):
-            print(rule["id"], "applicable:", rule["applicable"], "required:", rule["required"])
+
+    # --------------------------------------------------
+    # Test classifications
+    # --------------------------------------------------
+
+    domestic_retail = build_classification(
+        origin="domestic",
+        sale_type="retail",
+    )
+
+    imported_retail = build_classification(
+        origin="imported",
+        sale_type="retail",
+    )
+
+    domestic_wholesale = build_classification(
+        origin="domestic",
+        sale_type="wholesale",
+    )
+
+
+    test_cases = [
+        (
+            "domestic_retail",
+            domestic_retail,
+        ),
+        (
+            "imported_retail",
+            imported_retail,
+        ),
+        (
+            "domestic_wholesale",
+            domestic_wholesale,
+        ),
+    ]
+
+
+    # --------------------------------------------------
+    # Run tests
+    # --------------------------------------------------
+
+    for label, classification in test_cases:
+
+        print()
+        print("=" * 70)
+        print(label)
+        print("=" * 70)
+
+        print(
+            "CLASSIFICATION:",
+            classification,
+        )
+
+        print()
+
+
+        for rule in get_applicable_rules(
+            classification
+        ):
+
+            print(
+                rule["id"],
+                "| applicable:",
+                rule["applicable"],
+                "| required:",
+                rule["required"],
+            )
+
+            print(
+                "  applicability:",
+                rule["trace"]["applicability"],
+            )
+
+            print(
+                "  requirement:",
+                rule["trace"]["requirement"],
+            )
+
+            print()
