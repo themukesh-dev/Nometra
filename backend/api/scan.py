@@ -4,10 +4,12 @@ import os
 import sys
 import uuid
 import hashlib
+import inspect
 from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
 
 # Allows this file to find sibling top-level folders
 # (extraction/, engine/, classification/, etc.)
@@ -19,6 +21,7 @@ sys.path.append(
         )
     )
 )
+
 
 from extraction.gemini_vision import extract_label_data
 from extraction.ocr import extract_text_ocr
@@ -32,15 +35,32 @@ from database.inspections import (
     get_inspection_by_id,
 )
 
+
+# --------------------------------------------------
+# Database debugging
+# --------------------------------------------------
+
+import database.inspections as inspections_module
+
+print("DATABASE MODULE:", inspections_module.__file__)
+print("DATABASE PATH:", inspections_module.DB_PATH)
+print("SAVE_INSPECTION FUNCTION:")
+print(inspect.signature(save_inspection))
+
+
 app = Flask(__name__)
 CORS(app)
+
 
 # Make sure the inspections table exists before
 # the app starts taking requests.
 init_db()
 
-# Folder where uploaded images are temporarily saved
-# before processing.
+
+# --------------------------------------------------
+# Upload configuration
+# --------------------------------------------------
+
 UPLOAD_FOLDER = os.path.join(
     os.path.dirname(
         os.path.dirname(
@@ -51,6 +71,7 @@ UPLOAD_FOLDER = os.path.join(
 )
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 ALLOWED_EXTENSIONS = {
     "jpg",
@@ -75,6 +96,7 @@ def _calculate_sha256(file_path: str) -> str:
     The hash provides a tamper-evident fingerprint
     of the exact uploaded evidence file.
     """
+
     sha256 = hashlib.sha256()
 
     with open(file_path, "rb") as evidence_file:
@@ -86,6 +108,10 @@ def _calculate_sha256(file_path: str) -> str:
 
     return sha256.hexdigest()
 
+
+# --------------------------------------------------
+# Scan endpoint
+# --------------------------------------------------
 
 @app.route("/scan", methods=["POST"])
 def scan_label():
@@ -148,6 +174,7 @@ def scan_label():
             )
         }), 400
 
+
     # --------------------------------------------------
     # 2. Read classification from frontend
     # --------------------------------------------------
@@ -167,12 +194,14 @@ def scan_label():
         "retail",
     )
 
+
     # Temporary debug output to verify that the
     # frontend classification reaches the backend.
     print("CLASSIFICATION RECEIVED:")
     print("  category:", category)
     print("  origin:", origin)
     print("  sale_type:", sale_type)
+
 
     # --------------------------------------------------
     # 3. Build backend classification
@@ -188,6 +217,7 @@ def scan_label():
         return jsonify({
             "error": f"Invalid classification: {str(e)}"
         }), 400
+
 
     # --------------------------------------------------
     # 4. Save image temporarily
@@ -209,6 +239,7 @@ def scan_label():
 
     image_file.save(temp_path)
 
+
     try:
 
         # --------------------------------------------------
@@ -228,6 +259,7 @@ def scan_label():
         print("  hash:", evidence_hash)
         print("  timestamp:", evidence_timestamp)
 
+
         # --------------------------------------------------
         # 6. Gemini Vision extraction
         # --------------------------------------------------
@@ -235,6 +267,7 @@ def scan_label():
         gemini_result = extract_label_data(
             temp_path
         )
+
 
         # --------------------------------------------------
         # 7. OCR extraction
@@ -244,6 +277,7 @@ def scan_label():
             temp_path
         )
 
+
         # --------------------------------------------------
         # 8. Evidence fusion
         # --------------------------------------------------
@@ -252,6 +286,7 @@ def scan_label():
             gemini_result,
             ocr_result,
         )
+
 
         # --------------------------------------------------
         # 9. Rule engine
@@ -265,9 +300,17 @@ def scan_label():
             classification,
         )
 
+
         # --------------------------------------------------
         # 10. Save real inspection
         # --------------------------------------------------
+
+        print("ABOUT TO SAVE INSPECTION:")
+        print("  evidence_hash:", evidence_hash)
+        print(
+            "  evidence_timestamp:",
+            evidence_timestamp,
+        )
 
         inspection_id = save_inspection(
             fused_evidence,
@@ -275,6 +318,7 @@ def scan_label():
             evidence_hash=evidence_hash,
             evidence_timestamp=evidence_timestamp,
         )
+
 
         # --------------------------------------------------
         # 11. Return complete response
@@ -285,12 +329,15 @@ def scan_label():
 
             "classification": {
                 "category": category,
+
                 "commodity_type": classification[
                     "commodity_type"
                 ],
+
                 "origin": classification[
                     "origin"
                 ],
+
                 "sale_type": classification[
                     "sale_type"
                 ],
@@ -309,6 +356,7 @@ def scan_label():
 
         return jsonify(response), 200
 
+
     except Exception as e:
 
         return jsonify({
@@ -317,12 +365,17 @@ def scan_label():
             )
         }), 500
 
+
     finally:
 
         # Always remove temporary image.
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+
+# --------------------------------------------------
+# Historical inspections
+# --------------------------------------------------
 
 @app.route("/inspections", methods=["GET"])
 def list_inspections():
@@ -368,18 +421,31 @@ def get_inspection(inspection_id):
     return jsonify(inspection), 200
 
 
+# --------------------------------------------------
+# Health check
+# --------------------------------------------------
+
 @app.route("/health", methods=["GET"])
 def health_check():
+
     return jsonify({
         "status": "ok"
     }), 200
 
 
-# Register report routes.
+# --------------------------------------------------
+# Report routes
+# --------------------------------------------------
+
 import api.reports
 
 
+# --------------------------------------------------
+# Run Flask
+# --------------------------------------------------
+
 if __name__ == "__main__":
+
     app.run(
         debug=True,
         port=5000,
