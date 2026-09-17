@@ -33,13 +33,130 @@ export interface BackendScanResult {
       legal_reference: string;
       field: string;
 
-      status: 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+      status:
+        | 'PASS'
+        | 'FAIL'
+        | 'NOT_APPLICABLE';
 
       reason: string;
 
       extracted_value: string | null;
 
       verified_by_ocr: boolean;
+    }>;
+  };
+}
+
+/*
+ * --------------------------------------------------
+ * HISTORICAL BACKEND INSPECTION
+ * --------------------------------------------------
+ */
+
+export interface BackendHistoricalInspection {
+  id: number;
+
+  timestamp?: string;
+
+  created_at?: string;
+
+  overall_status:
+    | 'COMPLIANT'
+    | 'NON_COMPLIANT'
+    | 'VERIFICATION_REQUIRED';
+
+  passed: number;
+
+  failed: number;
+
+  evidence_hash?: string | null;
+
+  evidence_timestamp?: string | null;
+
+  extracted_data: Record<string, any>;
+
+  compliance_report: {
+    overall_status: string;
+
+    total_rules_checked: number;
+
+    passed: number;
+
+    failed: number;
+
+    classification?: {
+      commodity_type?: string;
+
+      origin?: string;
+
+      sale_type?: string;
+    };
+
+    results: Array<{
+      rule_id: string;
+
+      description: string;
+
+      legal_reference: string;
+
+      field: string;
+
+      status:
+        | 'PASS'
+        | 'FAIL'
+        | 'NOT_APPLICABLE';
+
+      reason: string;
+
+      extracted_value: string | null;
+
+      verified_by_ocr: boolean;
+
+      evidence?: {
+        field: string;
+
+        value: string | null;
+
+        source: string;
+
+        verified_by_ocr: boolean;
+
+        source_side?: string | null;
+      };
+
+      trace?: {
+        classification?: {
+          commodity_type?: string;
+
+          origin?: string;
+
+          sale_type?: string;
+        };
+
+        applicability?: {
+          applicable?: boolean;
+
+          exempted?: boolean;
+
+          exemption_reason?: string;
+
+          decision?: string;
+
+          decision_source?: string;
+        };
+
+        requirement?: {
+          required?: boolean;
+
+          condition?: string;
+
+          condition_result?: boolean;
+
+          decision?: string;
+
+          decision_source?: string;
+        };
+      };
     }>;
   };
 }
@@ -69,6 +186,37 @@ interface AppContextValue {
     sides: PackageSide[]
   ) => void;
 
+  /*
+   * --------------------------------------------------
+   * MULTI-IMAGE CAPTURE
+   * --------------------------------------------------
+   *
+   * Stores the actual image File for every captured
+   * package side.
+   */
+
+  capturedImages: Partial<
+    Record<PackageSide, File>
+  >;
+
+  setCapturedImages: (
+    images: Partial<
+      Record<PackageSide, File>
+    >
+  ) => void;
+
+  setCapturedImageForSide: (
+    side: PackageSide,
+    file: File | null
+  ) => void;
+
+  /*
+   * Legacy single-image state.
+   *
+   * Kept for compatibility with existing screens.
+   * It represents the most recently captured image.
+   */
+
   capturedImage: File | null;
 
   setCapturedImage: (
@@ -83,6 +231,27 @@ interface AppContextValue {
 
   applyBackendResultToInspection: (
     result: BackendScanResult
+  ) => void;
+
+  /*
+   * --------------------------------------------------
+   * HISTORICAL INSPECTION STATE
+   * --------------------------------------------------
+   */
+
+  historicalInspectionId: number | null;
+
+  setHistoricalInspectionId: (
+    id: number | null
+  ) => void;
+
+  historicalInspection:
+    BackendHistoricalInspection | null;
+
+  setHistoricalInspection: (
+    inspection:
+      | BackendHistoricalInspection
+      | null
   ) => void;
 
   analysisStep: number;
@@ -134,6 +303,37 @@ function generateId(): string {
   return `INS-2026-00${inspectionCounter++}`;
 }
 
+/*
+ * --------------------------------------------------
+ * RECALCULATE ACTIVE INSPECTION STATUS
+ * --------------------------------------------------
+ */
+
+function calculateOverallStatus(
+  findings: Finding[]
+): ComplianceStatus {
+  if (
+    findings.some(
+      (finding) =>
+        finding.status === 'NON_COMPLIANT'
+    )
+  ) {
+    return 'NON_COMPLIANT';
+  }
+
+  if (
+    findings.some(
+      (finding) =>
+        finding.status ===
+        'VERIFICATION_REQUIRED'
+    )
+  ) {
+    return 'VERIFICATION_REQUIRED';
+  }
+
+  return 'COMPLIANT';
+}
+
 export function AppProvider({
   children,
 }: {
@@ -151,11 +351,45 @@ export function AppProvider({
   const [capturedSides, setCapturedSides] =
     useState<PackageSide[]>([]);
 
+  /*
+   * --------------------------------------------------
+   * MULTI-IMAGE STATE
+   * --------------------------------------------------
+   */
+
+  const [capturedImages, setCapturedImages] =
+    useState<
+      Partial<Record<PackageSide, File>>
+    >({});
+
+  /*
+   * Legacy latest-image state.
+   */
+
   const [capturedImage, setCapturedImage] =
     useState<File | null>(null);
 
   const [backendResult, setBackendResult] =
     useState<BackendScanResult | null>(null);
+
+  /*
+   * --------------------------------------------------
+   * HISTORICAL INSPECTION STATE
+   * --------------------------------------------------
+   */
+
+  const [
+    historicalInspectionId,
+    setHistoricalInspectionId,
+  ] = useState<number | null>(null);
+
+  const [
+    historicalInspection,
+    setHistoricalInspection,
+  ] =
+    useState<BackendHistoricalInspection | null>(
+      null
+    );
 
   const [analysisStep, setAnalysisStep] =
     useState(0);
@@ -181,90 +415,134 @@ export function AppProvider({
     setScreen(s);
   };
 
-  const login = () => {
-    setIsLoggedIn(true);
-    setScreen('dashboard');
+  /*
+   * --------------------------------------------------
+   * STORE IMAGE FOR A SPECIFIC PACKAGE SIDE
+   * --------------------------------------------------
+   */
+
+  const setCapturedImageForSide = (
+    side: PackageSide,
+    file: File | null
+  ) => {
+    setCapturedImages(
+      (previous) => {
+        const updated = {
+          ...previous,
+        };
+
+        if (file) {
+          updated[side] = file;
+        } else {
+          delete updated[side];
+        }
+
+        return updated;
+      }
+    );
+
+    /*
+     * Keep legacy state synchronized with the
+     * most recently captured image.
+     */
+
+    setCapturedImage(file);
   };
 
   const logout = () => {
     setIsLoggedIn(false);
+
     setScreen('login');
 
     /*
-     * Clear any active inspection when logging out.
+     * Clear active inspection.
      */
+
     setCurrentInspection(null);
+
     setCapturedSides([]);
+
+    setCapturedImages({});
+
     setCapturedImage(null);
+
     setBackendResult(null);
+
+    /*
+     * Clear historical inspection state.
+     */
+
+    setHistoricalInspectionId(null);
+
+    setHistoricalInspection(null);
+
     setAnalysisStep(0);
+
     setSelectedFindingId(null);
+
     setInspectorNotes({});
+
     setInspectorDecisions({});
+
     setRemarksText('');
+  };
+
+  const login = () => {
+    setIsLoggedIn(true);
+
+    setScreen('dashboard');
   };
 
   /*
    * --------------------------------------------------
    * START NEW REAL INSPECTION
    * --------------------------------------------------
-   *
-   * NO DEMO DATA IS USED HERE.
-   *
-   * The inspection starts completely empty.
    */
 
   const startNewInspection = () => {
+    /*
+     * Starting a new inspection should not retain
+     * a previously selected historical inspection.
+     */
+
+    setHistoricalInspectionId(null);
+
+    setHistoricalInspection(null);
+
     const inspection: Inspection = {
       id: generateId(),
 
       createdAt:
         new Date().toISOString(),
 
-      /*
-       * These will be populated by the
-       * authenticated inspector / application
-       * workflow later.
-       */
       inspectorId: '',
 
       inspectorName: '',
 
       location: '',
 
-      /*
-       * Product starts empty because the product
-       * will be identified from the captured package.
-       */
       product: {
         id: '',
+
         name: '',
+
         brand: '',
+
         category: 'Other',
+
         isImported: false,
+
         saleType: 'retail',
+
         previousInspections: 0,
       },
 
-      /*
-       * No fake images.
-       */
       images: [],
 
-      /*
-       * No fake OCR/evidence.
-       */
       evidence: [],
 
-      /*
-       * No fake requirements.
-       * Backend will populate these after scanning.
-       */
       applicableRequirements: [],
 
-      /*
-       * No fake findings.
-       */
       findings: [],
 
       inspectorDecisions: [],
@@ -278,6 +556,8 @@ export function AppProvider({
     setCurrentInspection(inspection);
 
     setCapturedSides([]);
+
+    setCapturedImages({});
 
     setCapturedImage(null);
 
@@ -300,21 +580,6 @@ export function AppProvider({
    * --------------------------------------------------
    * APPLY REAL BACKEND RESULT
    * --------------------------------------------------
-   *
-   * Backend:
-   *
-   * Image
-   *   ↓
-   * Gemini Vision
-   *   ↓
-   * OCR
-   *   ↓
-   * Evidence Fusion
-   *   ↓
-   * Rule Engine
-   *
-   * This function converts that backend result
-   * into the frontend Inspection structure.
    */
 
   const applyBackendResultToInspection =
@@ -325,10 +590,6 @@ export function AppProvider({
 
         const backendFindings =
           result.compliance_report?.results ?? [];
-
-        /*
-         * Backend field → frontend requirement.
-         */
 
         const fieldToRequirement: Record<
           string,
@@ -432,17 +693,10 @@ export function AppProvider({
                 item.field
               ];
 
-            /*
-             * Ignore fields that don't have a
-             * frontend requirement mapping.
-             */
             if (!requirement) {
               return;
             }
 
-            /*
-             * Avoid duplicate requirements.
-             */
             const requirementExists =
               applicableRequirements.some(
                 (req) =>
@@ -460,10 +714,6 @@ export function AppProvider({
               `EV-BE-${String(
                 index + 1
               ).padStart(3, '0')}`;
-
-            /*
-             * Evidence status.
-             */
 
             let evidenceStatus:
               Evidence['status'] =
@@ -486,10 +736,20 @@ export function AppProvider({
             }
 
             /*
-             * Real extracted value from backend.
-             *
-             * Nothing here comes from mockData.ts.
+             * Backend multi-image extraction may
+             * provide source_side inside extracted_data.
              */
+
+            const extractedField =
+              extracted[item.field];
+
+            const sourceSide =
+              extractedField &&
+              typeof extractedField === 'object' &&
+              typeof extractedField.source_side ===
+                'string'
+                ? extractedField.source_side
+                : '';
 
             evidence.push({
               id: evidenceId,
@@ -509,12 +769,10 @@ export function AppProvider({
                   ? 95
                   : 80,
 
-              /*
-               * Image linking will be connected
-               * once captured image metadata is
-               * stored in Inspection.images.
-               */
-              imageId: '',
+              imageId:
+                sourceSide
+                  ? `SIDE-${sourceSide}`
+                  : '',
 
               source:
                 item.verified_by_ocr
@@ -527,11 +785,6 @@ export function AppProvider({
               rawEvidence:
                 item.reason,
             });
-
-            /*
-             * Backend status →
-             * frontend status.
-             */
 
             let status:
               ComplianceStatus;
@@ -610,11 +863,14 @@ export function AppProvider({
             ? extracted.manufacturer_name
             : '';
 
-        /*
-         * Product name is real extracted evidence.
-         */
-
         if (productName) {
+          const productSide =
+            extracted.product_name &&
+            typeof extracted.product_name ===
+              'object'
+              ? extracted.product_name.source_side
+              : '';
+
           evidence.push({
             id:
               'EV-EXTRACT-PRODUCT',
@@ -630,7 +886,10 @@ export function AppProvider({
 
             confidence: 90,
 
-            imageId: '',
+            imageId:
+              productSide
+                ? `SIDE-${productSide}`
+                : '',
 
             source:
               'VISION',
@@ -643,11 +902,14 @@ export function AppProvider({
           });
         }
 
-        /*
-         * Manufacturer is real extracted evidence.
-         */
-
         if (manufacturerName) {
+          const manufacturerSide =
+            extracted.manufacturer_name &&
+            typeof extracted.manufacturer_name ===
+              'object'
+              ? extracted.manufacturer_name.source_side
+              : '';
+
           evidence.push({
             id:
               'EV-EXTRACT-MANUFACTURER',
@@ -663,7 +925,10 @@ export function AppProvider({
 
             confidence: 90,
 
-            imageId: '',
+            imageId:
+              manufacturerSide
+                ? `SIDE-${manufacturerSide}`
+                : '',
 
             source:
               'VISION',
@@ -680,9 +945,6 @@ export function AppProvider({
          * ------------------------------------------------
          * UPDATE CURRENT INSPECTION
          * ------------------------------------------------
-         *
-         * Functional state update prevents stale
-         * React state from being used.
          */
 
         setCurrentInspection(
@@ -701,18 +963,9 @@ export function AppProvider({
               product: {
                 ...previousInspection.product,
 
-                /*
-                 * Actual product name extracted
-                 * from the scanned package.
-                 */
                 name:
                   productName,
 
-                /*
-                 * Until Product has a dedicated
-                 * manufacturer field, retain the
-                 * extracted manufacturer here.
-                 */
                 brand:
                   manufacturerName,
               },
@@ -776,6 +1029,78 @@ export function AppProvider({
         [findingId]: decision,
       })
     );
+
+    setCurrentInspection(
+      (previousInspection) => {
+        if (!previousInspection) {
+          return previousInspection;
+        }
+
+        const finding =
+          previousInspection.findings.find(
+            (item) =>
+              item.id === findingId
+          );
+
+        if (!finding) {
+          return previousInspection;
+        }
+
+        let updatedStatus:
+          ComplianceStatus;
+
+        if (decision === 'CONFIRM') {
+          if (
+            finding.status ===
+            'VERIFICATION_REQUIRED'
+          ) {
+            updatedStatus =
+              'COMPLIANT';
+          } else {
+            updatedStatus =
+              finding.status;
+          }
+        } else if (
+          decision === 'REJECT'
+        ) {
+          updatedStatus =
+            'COMPLIANT';
+        } else {
+          updatedStatus =
+            'VERIFICATION_REQUIRED';
+        }
+
+        const updatedFindings =
+          previousInspection.findings.map(
+            (item) =>
+              item.id === findingId
+                ? {
+                    ...item,
+                    status:
+                      updatedStatus,
+                    reviewRequired:
+                      updatedStatus !==
+                      'COMPLIANT',
+                  }
+                : item
+          );
+
+        const updatedOverallStatus =
+          calculateOverallStatus(
+            updatedFindings
+          );
+
+        return {
+          ...previousInspection,
+
+          findings:
+            updatedFindings,
+
+          overallStatus:
+            updatedOverallStatus,
+        };
+      }
+    );
   };
 
   return (
@@ -801,6 +1126,12 @@ export function AppProvider({
 
         setCapturedSides,
 
+        capturedImages,
+
+        setCapturedImages,
+
+        setCapturedImageForSide,
+
         capturedImage,
 
         setCapturedImage,
@@ -810,6 +1141,14 @@ export function AppProvider({
         setBackendResult,
 
         applyBackendResultToInspection,
+
+        historicalInspectionId,
+
+        setHistoricalInspectionId,
+
+        historicalInspection,
+
+        setHistoricalInspection,
 
         analysisStep,
 

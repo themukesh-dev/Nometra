@@ -21,8 +21,8 @@ def init_db():
     """
     Creates the inspections table if it doesn't already exist.
 
-    Also adds the evidence integrity columns when upgrading
-    an existing database created by an earlier version.
+    Also performs lightweight migrations for databases created
+    by earlier versions of Nometra.
     """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -37,34 +37,59 @@ def init_db():
             extracted_data TEXT NOT NULL,
             compliance_report TEXT NOT NULL,
             evidence_hash TEXT,
-            evidence_timestamp TEXT
+            evidence_timestamp TEXT,
+            inspector_decisions TEXT,
+            inspector_notes TEXT,
+            inspector_remarks TEXT,
+            final_status TEXT
         )
     """)
 
     # --------------------------------------------------
     # Database migration
+    # --------------------------------------------------
     #
     # Existing Nometra databases may already have the
-    # inspections table without the new integrity columns.
+    # inspections table without the newer columns.
     # --------------------------------------------------
 
     cursor.execute("PRAGMA table_info(inspections)")
+
     existing_columns = {
         row[1]
         for row in cursor.fetchall()
     }
 
-    if "evidence_hash" not in existing_columns:
-        cursor.execute("""
+    migrations = {
+        "evidence_hash": """
             ALTER TABLE inspections
             ADD COLUMN evidence_hash TEXT
-        """)
-
-    if "evidence_timestamp" not in existing_columns:
-        cursor.execute("""
+        """,
+        "evidence_timestamp": """
             ALTER TABLE inspections
             ADD COLUMN evidence_timestamp TEXT
-        """)
+        """,
+        "inspector_decisions": """
+            ALTER TABLE inspections
+            ADD COLUMN inspector_decisions TEXT
+        """,
+        "inspector_notes": """
+            ALTER TABLE inspections
+            ADD COLUMN inspector_notes TEXT
+        """,
+        "inspector_remarks": """
+            ALTER TABLE inspections
+            ADD COLUMN inspector_remarks TEXT
+        """,
+        "final_status": """
+            ALTER TABLE inspections
+            ADD COLUMN final_status TEXT
+        """,
+    }
+
+    for column_name, sql in migrations.items():
+        if column_name not in existing_columns:
+            cursor.execute(sql)
 
     conn.commit()
     conn.close()
@@ -75,17 +100,36 @@ def save_inspection(
     compliance_report: dict,
     evidence_hash: str | None = None,
     evidence_timestamp: str | None = None,
+    inspector_decisions: dict | None = None,
+    inspector_notes: dict | None = None,
+    inspector_remarks: str | None = None,
+    final_status: str | None = None,
 ) -> int:
     """
     Saves one scan result to the database.
 
     extracted_data and compliance_report are stored as JSON.
 
+    Inspector review data is also persisted as part of the
+    inspection audit record.
+
     evidence_hash:
         SHA-256 hash of the uploaded evidence image.
 
     evidence_timestamp:
         UTC timestamp associated with the evidence record.
+
+    inspector_decisions:
+        Mapping of frontend finding IDs to inspector decisions.
+
+    inspector_notes:
+        Mapping of frontend finding IDs to inspector notes.
+
+    inspector_remarks:
+        Overall remarks entered by the inspector.
+
+    final_status:
+        Final status after inspector review.
 
     Returns the new row's id.
     """
@@ -105,9 +149,13 @@ def save_inspection(
             extracted_data,
             compliance_report,
             evidence_hash,
-            evidence_timestamp
+            evidence_timestamp,
+            inspector_decisions,
+            inspector_notes,
+            inspector_remarks,
+            final_status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         _utc_timestamp(),
         compliance_report["overall_status"],
@@ -117,6 +165,10 @@ def save_inspection(
         json.dumps(compliance_report),
         evidence_hash,
         evidence_timestamp,
+        json.dumps(inspector_decisions or {}),
+        json.dumps(inspector_notes or {}),
+        inspector_remarks or "",
+        final_status,
     ))
 
     new_id = cursor.lastrowid
@@ -127,13 +179,55 @@ def save_inspection(
     return new_id
 
 
+def update_inspector_review(
+    inspection_id: int,
+    inspector_decisions: dict,
+    inspector_notes: dict | None = None,
+    inspector_remarks: str | None = None,
+    final_status: str | None = None,
+) -> bool:
+    """
+    Persists inspector review information for an existing inspection.
+
+    This is used after the inspector reviews the system findings.
+
+    Returns True when the inspection exists and was updated.
+    """
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE inspections
+        SET
+            inspector_decisions = ?,
+            inspector_notes = ?,
+            inspector_remarks = ?,
+            final_status = ?
+        WHERE id = ?
+    """, (
+        json.dumps(inspector_decisions or {}),
+        json.dumps(inspector_notes or {}),
+        inspector_remarks or "",
+        final_status,
+        inspection_id,
+    ))
+
+    updated = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return updated
+
+
 def get_all_inspections() -> list:
     """
     Returns a summary list of all past inspections
     (most recent first).
 
-    Includes the evidence timestamp and hash so the
-    history record can identify the integrity metadata.
+    Includes evidence integrity metadata and final
+    inspector review status.
     """
 
     conn = sqlite3.connect(DB_PATH)
@@ -148,7 +242,11 @@ def get_all_inspections() -> list:
             passed,
             failed,
             evidence_hash,
-            evidence_timestamp
+            evidence_timestamp,
+            inspector_decisions,
+            inspector_notes,
+            inspector_remarks,
+            final_status
         FROM inspections
         ORDER BY id DESC
     """)
@@ -156,13 +254,29 @@ def get_all_inspections() -> list:
     rows = cursor.fetchall()
     conn.close()
 
-    return [dict(row) for row in rows]
+    results = []
+
+    for row in rows:
+        result = dict(row)
+
+        result["inspector_decisions"] = json.loads(
+            result["inspector_decisions"]
+        ) if result["inspector_decisions"] else {}
+
+        result["inspector_notes"] = json.loads(
+            result["inspector_notes"]
+        ) if result["inspector_notes"] else {}
+
+        results.append(result)
+
+    return results
 
 
 def get_inspection_by_id(inspection_id: int):
     """
     Returns the full details for one past scan,
-    including evidence integrity metadata.
+    including evidence integrity metadata and
+    inspector review information.
     """
 
     conn = sqlite3.connect(DB_PATH)
@@ -190,10 +304,21 @@ def get_inspection_by_id(inspection_id: int):
         result["compliance_report"]
     )
 
+    result["inspector_decisions"] = json.loads(
+        result["inspector_decisions"]
+    ) if result.get("inspector_decisions") else {}
+
+    result["inspector_notes"] = json.loads(
+        result["inspector_notes"]
+    ) if result.get("inspector_notes") else {}
+
     return result
 
 
+# --------------------------------------------------
 # Standalone test runner
+# --------------------------------------------------
+
 if __name__ == "__main__":
     init_db()
 
@@ -221,6 +346,14 @@ if __name__ == "__main__":
         fake_report,
         evidence_hash="test_sha256_hash",
         evidence_timestamp=_utc_timestamp(),
+        inspector_decisions={
+            "FND-TEST-001": "CONFIRM"
+        },
+        inspector_notes={
+            "FND-TEST-001": "Inspector confirmed declaration."
+        },
+        inspector_remarks="Test inspector review.",
+        final_status="COMPLIANT",
     )
 
     print(

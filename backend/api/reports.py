@@ -1,4 +1,5 @@
 import os
+import html
 
 from __main__ import app
 
@@ -25,6 +26,7 @@ def get_report(inspection_id):
     """
     Returns the stored inspection report as JSON.
     """
+
     inspection = get_inspection_by_id(inspection_id)
 
     if inspection is None:
@@ -35,11 +37,88 @@ def get_report(inspection_id):
     return jsonify(inspection), 200
 
 
+def _final_status_for_result(
+    system_status: str,
+    decision: str | None,
+) -> str:
+    """
+    Converts the automated system assessment into the
+    final reviewed status when an inspector decision exists.
+
+    Decision semantics:
+
+        CONFIRM
+            Inspector confirms the finding as acceptable.
+
+        REJECT
+            Inspector rejects the finding.
+
+        MODIFY
+            Finding requires further verification.
+
+        REQUEST_EVIDENCE
+            Finding requires additional evidence.
+
+    If no inspector decision exists, the original automated
+    status is preserved.
+    """
+
+    if not decision:
+        return system_status
+
+    if decision == "CONFIRM":
+        return "PASS"
+
+    if decision == "REJECT":
+        return "FAIL"
+
+    if decision in {
+        "MODIFY",
+        "REQUEST_EVIDENCE",
+    }:
+        return "VERIFICATION_REQUIRED"
+
+    return system_status
+
+
+def _display_status(
+    system_status: str,
+    final_status: str,
+    decision: str | None,
+) -> str:
+    """
+    Creates the status text displayed in the PDF.
+
+    When an inspector has reviewed a finding, the final
+    reviewed status is shown together with the inspector
+    decision so the automated assessment remains auditable.
+    """
+
+    if not decision:
+        return final_status
+
+    decision_label = decision.replace(
+        "_",
+        " ",
+    )
+
+    return (
+        f"{final_status}<br/>"
+        f"<font size='6'>Inspector: "
+        f"{html.escape(decision_label)}</font>"
+    )
+
+
 @app.route("/reports/<int:inspection_id>/pdf", methods=["GET"])
 def download_report_pdf(inspection_id):
     """
     Generates and downloads a readable A4 PDF report
     from the stored inspection data.
+
+    The PDF uses the persisted inspector review when
+    determining the final displayed status of each rule.
+    The original automated assessment remains available
+    through the stored inspection record.
     """
 
     inspection = get_inspection_by_id(inspection_id)
@@ -52,9 +131,32 @@ def download_report_pdf(inspection_id):
     compliance_report = inspection["compliance_report"]
     extracted_data = inspection["extracted_data"]
 
+    inspector_decisions = inspection.get(
+        "inspector_decisions",
+        {},
+    )
+
+    inspector_notes = inspection.get(
+        "inspector_notes",
+        {},
+    )
+
+    inspector_remarks = inspection.get(
+        "inspector_remarks",
+        "",
+    )
+
+    stored_final_status = inspection.get(
+        "final_status"
+    )
+
     # Save PDF inside the backend folder
     pdf_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.path.dirname(
+            os.path.dirname(
+                os.path.abspath(__file__)
+            )
+        ),
         f"inspection_{inspection_id}.pdf"
     )
 
@@ -122,13 +224,26 @@ def download_report_pdf(inspection_id):
         leading=9,
     )
 
+    status_style = ParagraphStyle(
+        "StatusText",
+        parent=styles["Normal"],
+        fontSize=7,
+        leading=9,
+        alignment=TA_CENTER,
+    )
+
     story = []
 
     # ---------------------------------------------------------
     # Header
     # ---------------------------------------------------------
 
-    story.append(Paragraph("NOMETRA", title_style))
+    story.append(
+        Paragraph(
+            "NOMETRA",
+            title_style
+        )
+    )
 
     story.append(
         Paragraph(
@@ -139,31 +254,111 @@ def download_report_pdf(inspection_id):
 
     story.append(
         Paragraph(
-            f"<b>Inspection ID:</b> {inspection['id']}<br/>"
-            f"<b>Timestamp:</b> {inspection['timestamp']}",
+            f"<b>Inspection ID:</b> "
+            f"{html.escape(str(inspection['id']))}<br/>"
+            f"<b>Timestamp:</b> "
+            f"{html.escape(str(inspection['timestamp']))}",
             normal_style,
         )
     )
 
-    story.append(Spacer(1, 6))
+    story.append(
+        Spacer(
+            1,
+            6
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Determine final rule statuses
+    # ---------------------------------------------------------
+
+    results = compliance_report.get(
+        "results",
+        []
+    )
+
+    final_results = []
+
+    for result in results:
+        rule_id = result.get(
+            "rule_id",
+            "-"
+        )
+
+        system_status = result.get(
+            "status",
+            "-"
+        )
+
+        decision = inspector_decisions.get(
+            rule_id
+        )
+
+        final_status = _final_status_for_result(
+            system_status,
+            decision,
+        )
+
+        final_results.append({
+            "result": result,
+            "system_status": system_status,
+            "decision": decision,
+            "final_status": final_status,
+        })
 
     # ---------------------------------------------------------
     # Overall status
     # ---------------------------------------------------------
 
-    overall_status = compliance_report.get(
-        "overall_status",
-        "UNKNOWN"
+    if stored_final_status:
+        overall_status = stored_final_status
+    else:
+        final_statuses = [
+            item["final_status"]
+            for item in final_results
+        ]
+
+        if "FAIL" in final_statuses:
+            overall_status = "NON_COMPLIANT"
+        elif "VERIFICATION_REQUIRED" in final_statuses:
+            overall_status = "VERIFICATION_REQUIRED"
+        else:
+            overall_status = "COMPLIANT"
+
+    final_passed = sum(
+        1
+        for item in final_results
+        if item["final_status"] == "PASS"
     )
 
-    passed = compliance_report.get("passed", 0)
-    failed = compliance_report.get("failed", 0)
+    final_failed = sum(
+        1
+        for item in final_results
+        if item["final_status"] == "FAIL"
+    )
+
+    final_verification_required = sum(
+        1
+        for item in final_results
+        if item["final_status"]
+        == "VERIFICATION_REQUIRED"
+    )
 
     story.append(
         Paragraph(
-            f"<b>Overall Status:</b> {overall_status}<br/>"
-            f"<b>Passed:</b> {passed} &nbsp;&nbsp;&nbsp;"
-            f"<b>Failed:</b> {failed}",
+            f"<b>Overall Status:</b> "
+            f"{html.escape(str(overall_status))}<br/>"
+            f"<b>Passed:</b> {final_passed} "
+            f"&nbsp;&nbsp;&nbsp;"
+            f"<b>Failed:</b> {final_failed}"
+            + (
+                f" &nbsp;&nbsp;&nbsp;"
+                f"<b>Verification Required:</b> "
+                f"{final_verification_required}"
+                if final_verification_required > 0
+                else ""
+            ),
             normal_style,
         )
     )
@@ -191,16 +386,27 @@ def download_report_pdf(inspection_id):
 
     product_table_data = [
         [
-            Paragraph("<b>Field</b>", header_style),
-            Paragraph("<b>Extracted Value</b>", header_style),
+            Paragraph(
+                "<b>Field</b>",
+                header_style
+            ),
+            Paragraph(
+                "<b>Extracted Value</b>",
+                header_style
+            ),
         ]
     ]
 
     for display_name, field_name in product_fields:
-        field_data = extracted_data.get(field_name, {})
+        field_data = extracted_data.get(
+            field_name,
+            {}
+        )
 
         if isinstance(field_data, dict):
-            value = field_data.get("value")
+            value = field_data.get(
+                "value"
+            )
         else:
             value = field_data
 
@@ -208,25 +414,74 @@ def download_report_pdf(inspection_id):
             value = "Not found"
 
         product_table_data.append([
-            Paragraph(str(display_name), normal_style),
-            Paragraph(str(value), normal_style),
+            Paragraph(
+                html.escape(
+                    str(display_name)
+                ),
+                normal_style,
+            ),
+            Paragraph(
+                html.escape(
+                    str(value)
+                ),
+                normal_style,
+            ),
         ])
 
     product_table = Table(
         product_table_data,
-        colWidths=[45 * mm, 135 * mm],
+        colWidths=[
+            45 * mm,
+            135 * mm,
+        ],
         repeatRows=1,
     )
 
     product_table.setStyle(
         TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, 0),
+                colors.lightgrey
+            ),
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.grey
+            ),
+            (
+                "VALIGN",
+                (0, 0),
+                (-1, -1),
+                "TOP"
+            ),
+            (
+                "LEFTPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+            (
+                "RIGHTPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+            (
+                "TOPPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+            (
+                "BOTTOMPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
         ])
     )
 
@@ -245,29 +500,85 @@ def download_report_pdf(inspection_id):
 
     rule_table_data = [
         [
-            Paragraph("<b>Rule ID</b>", header_style),
-            Paragraph("<b>Requirement</b>", header_style),
-            Paragraph("<b>Status</b>", header_style),
-            Paragraph("<b>Extracted Value</b>", header_style),
+            Paragraph(
+                "<b>Rule ID</b>",
+                header_style
+            ),
+            Paragraph(
+                "<b>Requirement</b>",
+                header_style
+            ),
+            Paragraph(
+                "<b>Status</b>",
+                header_style
+            ),
+            Paragraph(
+                "<b>Extracted Value</b>",
+                header_style
+            ),
         ]
     ]
 
-    results = compliance_report.get("results", [])
+    for item in final_results:
+        result = item["result"]
 
-    for result in results:
-        rule_id = result.get("rule_id", "-")
-        description = result.get("description", "-")
-        status = result.get("status", "-")
-        extracted_value = result.get("extracted_value")
+        rule_id = result.get(
+            "rule_id",
+            "-"
+        )
 
-        if extracted_value is None or extracted_value == "":
+        description = result.get(
+            "description",
+            "-"
+        )
+
+        final_status = item[
+            "final_status"
+        ]
+
+        decision = item[
+            "decision"
+        ]
+
+        extracted_value = result.get(
+            "extracted_value"
+        )
+
+        if (
+            extracted_value is None
+            or extracted_value == ""
+        ):
             extracted_value = "Not found"
 
+        status_text = _display_status(
+            item["system_status"],
+            final_status,
+            decision,
+        )
+
         rule_table_data.append([
-            Paragraph(str(rule_id), small_style),
-            Paragraph(str(description), normal_style),
-            Paragraph(str(status), header_style),
-            Paragraph(str(extracted_value), normal_style),
+            Paragraph(
+                html.escape(
+                    str(rule_id)
+                ),
+                small_style,
+            ),
+            Paragraph(
+                html.escape(
+                    str(description)
+                ),
+                normal_style,
+            ),
+            Paragraph(
+                status_text,
+                status_style,
+            ),
+            Paragraph(
+                html.escape(
+                    str(extracted_value)
+                ),
+                normal_style,
+            ),
         ])
 
     rule_table = Table(
@@ -282,19 +593,64 @@ def download_report_pdf(inspection_id):
     )
 
     rule_table_style = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        (
+            "BACKGROUND",
+            (0, 0),
+            (-1, 0),
+            colors.lightgrey
+        ),
+        (
+            "GRID",
+            (0, 0),
+            (-1, -1),
+            0.5,
+            colors.grey
+        ),
+        (
+            "VALIGN",
+            (0, 0),
+            (-1, -1),
+            "TOP"
+        ),
+        (
+            "LEFTPADDING",
+            (0, 0),
+            (-1, -1),
+            4
+        ),
+        (
+            "RIGHTPADDING",
+            (0, 0),
+            (-1, -1),
+            4
+        ),
+        (
+            "TOPPADDING",
+            (0, 0),
+            (-1, -1),
+            5
+        ),
+        (
+            "BOTTOMPADDING",
+            (0, 0),
+            (-1, -1),
+            5
+        ),
     ]
 
-    for row_index, result in enumerate(results, start=1):
-        status = result.get("status", "")
+    # ---------------------------------------------------------
+    # Status colours use FINAL reviewed status
+    # ---------------------------------------------------------
 
-        if status == "PASS":
+    for row_index, item in enumerate(
+        final_results,
+        start=1
+    ):
+        final_status = item[
+            "final_status"
+        ]
+
+        if final_status == "PASS":
             rule_table_style.append(
                 (
                     "BACKGROUND",
@@ -304,7 +660,7 @@ def download_report_pdf(inspection_id):
                 )
             )
 
-        elif status == "FAIL":
+        elif final_status == "FAIL":
             rule_table_style.append(
                 (
                     "BACKGROUND",
@@ -314,7 +670,7 @@ def download_report_pdf(inspection_id):
                 )
             )
 
-        elif status == "NOT_APPLICABLE":
+        elif final_status == "NOT_APPLICABLE":
             rule_table_style.append(
                 (
                     "BACKGROUND",
@@ -324,22 +680,233 @@ def download_report_pdf(inspection_id):
                 )
             )
 
-    rule_table.setStyle(TableStyle(rule_table_style))
+        elif final_status == "VERIFICATION_REQUIRED":
+            rule_table_style.append(
+                (
+                    "BACKGROUND",
+                    (2, row_index),
+                    (2, row_index),
+                    colors.lightyellow
+                )
+            )
+
+    rule_table.setStyle(
+        TableStyle(
+            rule_table_style
+        )
+    )
 
     story.append(rule_table)
+
+    # ---------------------------------------------------------
+    # Inspector Review
+    # ---------------------------------------------------------
+
+    if (
+        inspector_decisions
+        or inspector_notes
+        or inspector_remarks
+    ):
+        story.append(
+            Paragraph(
+                "Inspector Review",
+                heading_style
+            )
+        )
+
+        if inspector_decisions:
+            review_table_data = [
+                [
+                    Paragraph(
+                        "<b>Rule ID</b>",
+                        header_style
+                    ),
+                    Paragraph(
+                        "<b>Inspector Decision</b>",
+                        header_style
+                    ),
+                    Paragraph(
+                        "<b>Inspector Note</b>",
+                        header_style
+                    ),
+                ]
+            ]
+
+            for item in final_results:
+                result = item["result"]
+
+                rule_id = result.get(
+                    "rule_id",
+                    "-"
+                )
+
+                decision = item[
+                    "decision"
+                ]
+
+                if not decision:
+                    continue
+
+                note = inspector_notes.get(
+                    rule_id,
+                    ""
+                )
+
+                review_table_data.append([
+                    Paragraph(
+                        html.escape(
+                            str(rule_id)
+                        ),
+                        small_style,
+                    ),
+                    Paragraph(
+                        html.escape(
+                            decision.replace(
+                                "_",
+                                " "
+                            )
+                        ),
+                        normal_style,
+                    ),
+                    Paragraph(
+                        html.escape(
+                            str(note)
+                            if note
+                            else "-"
+                        ),
+                        normal_style,
+                    ),
+                ])
+
+            if len(review_table_data) > 1:
+                review_table = Table(
+                    review_table_data,
+                    colWidths=[
+                        35 * mm,
+                        45 * mm,
+                        100 * mm,
+                    ],
+                    repeatRows=1,
+                )
+
+                review_table.setStyle(
+                    TableStyle([
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (-1, 0),
+                            colors.lightgrey
+                        ),
+                        (
+                            "GRID",
+                            (0, 0),
+                            (-1, -1),
+                            0.5,
+                            colors.grey
+                        ),
+                        (
+                            "VALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "TOP"
+                        ),
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4
+                        ),
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4
+                        ),
+                    ])
+                )
+
+                story.append(
+                    review_table
+                )
+
+        if inspector_remarks:
+            story.append(
+                Spacer(
+                    1,
+                    6
+                )
+            )
+
+            story.append(
+                Paragraph(
+                    f"<b>Inspector Remarks:</b> "
+                    f"{html.escape(str(inspector_remarks))}",
+                    normal_style,
+                )
+            )
+
+    # ---------------------------------------------------------
+    # Evidence integrity
+    # ---------------------------------------------------------
+
+    evidence_hash = inspection.get(
+        "evidence_hash"
+    )
+
+    evidence_timestamp = inspection.get(
+        "evidence_timestamp"
+    )
+
+    if evidence_hash:
+        story.append(
+            Paragraph(
+                "Evidence Integrity",
+                heading_style
+            )
+        )
+
+        story.append(
+            Paragraph(
+                f"<b>Algorithm:</b> SHA-256<br/>"
+                f"<b>Evidence Hash:</b> "
+                f"{html.escape(str(evidence_hash))}<br/>"
+                f"<b>Evidence Timestamp:</b> "
+                f"{html.escape(str(evidence_timestamp or '-'))}",
+                small_style,
+            )
+        )
 
     # ---------------------------------------------------------
     # Note
     # ---------------------------------------------------------
 
-    story.append(Spacer(1, 10))
+    story.append(
+        Spacer(
+            1,
+            10
+        )
+    )
 
     story.append(
         Paragraph(
-            "<b>Note:</b> This report represents an automated preliminary "
-            "compliance check based on the configured Legal Metrology "
-            "declaration rules. Final regulatory determination remains "
-            "subject to human inspection and applicable law.",
+            "<b>Note:</b> This report represents an automated "
+            "preliminary compliance check based on the configured "
+            "Legal Metrology declaration rules and records the "
+            "subsequent inspector review where applicable. Final "
+            "regulatory determination remains subject to human "
+            "inspection and applicable law.",
             small_style,
         )
     )
@@ -353,6 +920,8 @@ def download_report_pdf(inspection_id):
     return send_file(
         pdf_path,
         as_attachment=True,
-        download_name=f"Nometra_Inspection_{inspection_id}.pdf",
+        download_name=(
+            f"Nometra_Inspection_{inspection_id}.pdf"
+        ),
         mimetype="application/pdf",
     )

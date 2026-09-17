@@ -1,428 +1,730 @@
-import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, XCircle } from 'lucide-react';
-import MobileShell from '../components/MobileShell';
+import { useEffect, useState } from 'react';
+
+import {
+  CheckCircle2,
+  Circle,
+  Loader2,
+  XCircle,
+} from 'lucide-react';
+
 import { useApp } from '../context/AppContext';
 
-const STEPS = [
-  {
-    label: 'Images received',
-    detail: 'Image ready for processing',
-  },
-  {
-    label: 'Image quality verified',
-    detail: 'Quality checks completed',
-  },
-  {
-    label: 'Text extracted',
-    detail: 'OCR + Vision extraction completed',
-  },
-  {
-    label: 'Declarations identified',
-    detail: 'Package declarations normalized',
-  },
-  {
-    label: 'Determining applicable requirements',
-    detail: 'Applying Legal Metrology rules',
-  },
-  {
-    label: 'Evaluating compliance',
-    detail: 'Rule engine evaluating declarations',
-  },
-  {
-    label: 'Linking findings to evidence',
-    detail: 'Evidence references attached',
-  },
-];
+type AnalysisStatus =
+  | 'pending'
+  | 'active'
+  | 'complete'
+  | 'error';
+
+interface AnalysisStep {
+  label: string;
+  status: AnalysisStatus;
+}
 
 export default function AnalysisScreen() {
   const {
     navigate,
     capturedImage,
+    capturedImages,
     currentInspection,
     setBackendResult,
     applyBackendResultToInspection,
     setAnalysisStep,
   } = useApp();
 
-  const [currentStep, setCurrentStep] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [backendFinished, setBackendFinished] = useState(false);
+  const [steps, setSteps] = useState<
+    AnalysisStep[]
+  >([
+    {
+      label: 'Images received',
+      status: 'pending',
+    },
+    {
+      label: 'Image quality verified',
+      status: 'pending',
+    },
+    {
+      label: 'Text extracted',
+      status: 'pending',
+    },
+    {
+      label: 'Declarations identified',
+      status: 'pending',
+    },
+    {
+      label:
+        'Determining applicable requirements',
+      status: 'pending',
+    },
+    {
+      label: 'Evaluating compliance',
+      status: 'pending',
+    },
+    {
+      label: 'Linking findings to evidence',
+      status: 'pending',
+    },
+  ]);
+
+  const [error, setError] =
+    useState<string | null>(null);
 
   /*
-   * Prevent duplicate backend scans for the same image.
+   * --------------------------------------------------
+   * HELPERS
+   * --------------------------------------------------
    */
-  const scanStartedRef = useRef(false);
+
+  const updateStep = (
+    index: number,
+    status: AnalysisStatus
+  ) => {
+    setSteps((previous) =>
+      previous.map((step, stepIndex) =>
+        stepIndex === index
+          ? {
+              ...step,
+              status,
+            }
+          : step
+      )
+    );
+
+    setAnalysisStep(index);
+  };
 
   /*
-   * Visual progress only.
+   * --------------------------------------------------
+   * RUN BACKEND ANALYSIS
+   * --------------------------------------------------
    */
+
   useEffect(() => {
-    if (!capturedImage) return;
+    let cancelled = false;
 
-    setCurrentStep(0);
-    setAnalysisStep(0);
+    const runAnalysis = async () => {
+      setError(null);
 
-    const interval = window.setInterval(() => {
-      setCurrentStep((previous) => {
-        if (previous >= STEPS.length - 1) {
-          return previous;
+      /*
+       * ------------------------------------------------
+       * COLLECT ALL CAPTURED IMAGES
+       * ------------------------------------------------
+       *
+       * capturedImages contains:
+       *
+       * {
+       *   FRONT: File,
+       *   BACK: File,
+       *   LEFT: File,
+       *   RIGHT: File,
+       *   BOTTOM: File
+       * }
+       *
+       * We send every available image.
+       */
+
+      const multiViewEntries =
+        Object.entries(capturedImages).filter(
+          (
+            entry
+          ): entry is [
+            string,
+            File
+          ] =>
+            entry[1] instanceof File
+        );
+
+      /*
+       * ------------------------------------------------
+       * SINGLE IMAGE FALLBACK
+       * ------------------------------------------------
+       *
+       * This keeps the existing flow working if
+       * capturedImages is empty but capturedImage exists.
+       */
+
+      if (
+        multiViewEntries.length === 0 &&
+        !capturedImage
+      ) {
+        setError(
+          'No package image was captured. Please capture at least one image.'
+        );
+
+        updateStep(0, 'error');
+
+        return;
+      }
+
+      /*
+       * ------------------------------------------------
+       * SORT SIDES INTO A DETERMINISTIC ORDER
+       * ------------------------------------------------
+       */
+
+      const sideOrder = [
+        'FRONT',
+        'BACK',
+        'LEFT',
+        'RIGHT',
+        'BOTTOM',
+      ];
+
+      multiViewEntries.sort(
+        ([sideA], [sideB]) => {
+          const indexA =
+            sideOrder.indexOf(sideA);
+
+          const indexB =
+            sideOrder.indexOf(sideB);
+
+          return (
+            (indexA === -1
+              ? 999
+              : indexA) -
+            (indexB === -1
+              ? 999
+              : indexB)
+          );
         }
+      );
 
-        return previous + 1;
+      /*
+       * ------------------------------------------------
+       * BUILD IMAGE LIST
+       * ------------------------------------------------
+       */
+
+      const images =
+        multiViewEntries.length > 0
+          ? multiViewEntries.map(
+              ([, file]) => file
+            )
+          : capturedImage
+          ? [capturedImage]
+          : [];
+
+      const sides =
+        multiViewEntries.length > 0
+          ? multiViewEntries.map(
+              ([side]) => side
+            )
+          : ['FRONT'];
+
+      /*
+       * ------------------------------------------------
+       * STEP 1 — IMAGES RECEIVED
+       * ------------------------------------------------
+       */
+
+      updateStep(0, 'active');
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 350)
+      );
+
+      if (cancelled) return;
+
+      updateStep(0, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * STEP 2 — IMAGE QUALITY
+       * ------------------------------------------------
+       *
+       * The backend currently performs the real
+       * processing. This step represents the pipeline
+       * stage before extraction.
+       */
+
+      updateStep(1, 'active');
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 350)
+      );
+
+      if (cancelled) return;
+
+      updateStep(1, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * CREATE FORMDATA
+       * ------------------------------------------------
+       */
+
+      const formData =
+        new FormData();
+
+      /*
+       * Multi-image request.
+       *
+       * Every image is appended under the same
+       * "images" field.
+       *
+       * Flask will later read them using:
+       *
+       * request.files.getlist("images")
+       */
+
+      images.forEach((file) => {
+        formData.append(
+          'images',
+          file,
+          file.name
+        );
       });
-    }, 700);
 
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [capturedImage, setAnalysisStep]);
+      /*
+       * Side information is sent in exactly the
+       * same order as the images above.
+       */
 
-  /*
-   * Synchronize visual progress with app context.
-   */
-  useEffect(() => {
-    setAnalysisStep(currentStep);
-  }, [currentStep, setAnalysisStep]);
-
-  /*
-   * Actual backend scan.
-   *
-   * IMPORTANT:
-   * currentInspection is intentionally NOT included
-   * in the dependency array because applying the backend
-   * result updates currentInspection.
-   *
-   * scanStartedRef prevents duplicate requests.
-   */
-  useEffect(() => {
-    if (!capturedImage) {
-      setError(
-        'No image was captured. Please return to Capture and select an image.'
+      formData.append(
+        'image_sides',
+        JSON.stringify(sides)
       );
-      return;
-    }
 
-    if (!currentInspection) {
-      setError(
-        'No active inspection was found. Please start a new inspection.'
+      /*
+       * ------------------------------------------------
+       * CLASSIFICATION
+       * ------------------------------------------------
+       */
+
+      const category =
+        currentInspection?.product
+          ?.category ?? 'Other';
+
+      const origin =
+        currentInspection?.product
+          ?.isImported
+          ? 'imported'
+          : 'domestic';
+
+      const saleType =
+        currentInspection?.product
+          ?.saleType ?? 'retail';
+
+      formData.append(
+        'category',
+        category
       );
-      return;
-    }
 
-    /*
-     * Prevent duplicate scans.
-     */
-    if (scanStartedRef.current) {
-      return;
-    }
+      formData.append(
+        'origin',
+        origin
+      );
 
-    scanStartedRef.current = true;
+      formData.append(
+        'sale_type',
+        saleType
+      );
 
-    /*
-     * Snapshot classification before the backend result
-     * updates currentInspection.
-     */
-    const category =
-      currentInspection.product.category;
+      /*
+       * ------------------------------------------------
+       * STEP 3 — TEXT EXTRACTION
+       * ------------------------------------------------
+       */
 
-    const origin =
-      currentInspection.product.isImported
-        ? 'imported'
-        : 'domestic';
+      updateStep(2, 'active');
 
-    const saleType =
-      currentInspection.product.saleType;
+      /*
+       * Give the UI a short delay so the user can
+       * actually see the processing stage.
+       */
 
-    const runScan = async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 450)
+      );
+
+      if (cancelled) return;
+
+      /*
+       * ------------------------------------------------
+       * BACKEND REQUEST
+       * ------------------------------------------------
+       */
+
+      let response: Response;
+
       try {
-        setError(null);
-        setBackendFinished(false);
-
-        const formData = new FormData();
-
-        /*
-         * Package image.
-         */
-        formData.append(
-          'image',
-          capturedImage
-        );
-
-        /*
-         * Product classification.
-         */
-        formData.append(
-          'category',
-          category
-        );
-
-        formData.append(
-          'origin',
-          origin
-        );
-
-        formData.append(
-          'sale_type',
-          saleType
-        );
-
-        const response = await fetch(
+        response = await fetch(
           'http://127.0.0.1:5000/scan',
           {
             method: 'POST',
             body: formData,
           }
         );
+      } catch (networkError) {
+        console.error(
+          'Backend connection error:',
+          networkError
+        );
 
-        const data = await response.json();
+        throw new Error(
+          'Unable to connect to the Nometra backend. Make sure the Flask server is running on port 5000.'
+        );
+      }
 
-        if (!response.ok) {
-          throw new Error(
-            data?.error ||
-              `Backend returned HTTP ${response.status}`
-          );
+      if (!response.ok) {
+        let backendMessage =
+          `Backend returned HTTP ${response.status}.`;
+
+        try {
+          const errorData =
+            await response.json();
+
+          if (
+            typeof errorData?.error ===
+            'string'
+          ) {
+            backendMessage =
+              errorData.error;
+          }
+        } catch {
+          /*
+           * Keep the default HTTP error message
+           * if the backend response is not JSON.
+           */
         }
 
-        /*
-         * Store complete backend response.
-         */
-        setBackendResult(data);
+        throw new Error(
+          backendMessage
+        );
+      }
 
-        /*
-         * Convert backend extraction + compliance
-         * results into the current inspection.
-         */
-        applyBackendResultToInspection(data);
+      const result =
+        await response.json();
 
-        /*
-         * Backend processing is now complete.
-         */
-        setBackendFinished(true);
+      if (cancelled) return;
 
-      } catch (err) {
-        /*
-         * Allow another attempt if the request fails.
-         */
-        scanStartedRef.current = false;
+      /*
+       * ------------------------------------------------
+       * STORE REAL BACKEND RESULT
+       * ------------------------------------------------
+       */
+
+      setBackendResult(result);
+
+      /*
+       * ------------------------------------------------
+       * TEXT EXTRACTION COMPLETE
+       * ------------------------------------------------
+       */
+
+      updateStep(2, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * STEP 4 — DECLARATIONS IDENTIFIED
+       * ------------------------------------------------
+       */
+
+      updateStep(3, 'active');
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 350)
+      );
+
+      if (cancelled) return;
+
+      updateStep(3, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * STEP 5 — APPLICABLE REQUIREMENTS
+       * ------------------------------------------------
+       */
+
+      updateStep(4, 'active');
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 350)
+      );
+
+      if (cancelled) return;
+
+      updateStep(4, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * STEP 6 — COMPLIANCE EVALUATION
+       * ------------------------------------------------
+       */
+
+      updateStep(5, 'active');
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 350)
+      );
+
+      if (cancelled) return;
+
+      updateStep(5, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * STEP 7 — EVIDENCE LINKING
+       * ------------------------------------------------
+       */
+
+      updateStep(6, 'active');
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 350)
+      );
+
+      if (cancelled) return;
+
+      /*
+       * Apply the complete backend result to the
+       * current frontend inspection.
+       *
+       * This also maps source_side from multi-view
+       * extraction into SIDE-FRONT / SIDE-BACK etc.
+       */
+
+      applyBackendResultToInspection(
+        result
+      );
+
+      updateStep(6, 'complete');
+
+      /*
+       * ------------------------------------------------
+       * FINISH
+       * ------------------------------------------------
+       */
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 500)
+      );
+
+      if (cancelled) return;
+
+      navigate(
+        'compliance-result'
+      );
+    };
+
+    runAnalysis().catch(
+      (analysisError) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.error(
+          'Analysis failed:',
+          analysisError
+        );
 
         const message =
-          err instanceof Error
-            ? err.message
-            : 'Unable to connect to the backend.';
+          analysisError instanceof
+          Error
+            ? analysisError.message
+            : 'Analysis failed. Please try again.';
 
         setError(message);
+
+        setSteps((previous) =>
+          previous.map(
+            (step, index) =>
+              step.status ===
+                'active'
+                ? {
+                    ...step,
+                    status: 'error',
+                  }
+                : step
+          )
+        );
       }
-    };
-
-    runScan();
-
-    /*
-     * IMPORTANT:
-     * Do not use a cancelled flag here.
-     *
-     * React Strict Mode can execute the effect,
-     * immediately clean it up, and execute it again.
-     *
-     * Cancelling the first request would cause the
-     * successful backend response to be ignored.
-     */
-  }, [
-    capturedImage,
-    setBackendResult,
-    applyBackendResultToInspection,
-  ]);
-
-  /*
-   * Navigate to compliance result after
-   * backend processing completes.
-   */
-  useEffect(() => {
-    if (!backendFinished) return;
-
-    setCurrentStep(STEPS.length - 1);
-    setAnalysisStep(STEPS.length);
-
-    const timer = window.setTimeout(() => {
-      navigate('compliance-result');
-    }, 700);
+    );
 
     return () => {
-      window.clearTimeout(timer);
+      cancelled = true;
     };
   }, [
-    backendFinished,
+    capturedImage,
+    capturedImages,
+    currentInspection,
     navigate,
+    setBackendResult,
+    applyBackendResultToInspection,
     setAnalysisStep,
   ]);
 
   /*
-   * Error state.
+   * --------------------------------------------------
+   * RENDER STATUS ICON
+   * --------------------------------------------------
    */
-  if (error) {
+
+  const renderStatusIcon = (
+    status: AnalysisStatus
+  ) => {
+    if (status === 'active') {
+      return (
+        <Loader2
+          size={20}
+          className="animate-spin"
+        />
+      );
+    }
+
+    if (status === 'complete') {
+      return (
+        <CheckCircle2
+          size={20}
+        />
+      );
+    }
+
+    if (status === 'error') {
+      return (
+        <XCircle
+          size={20}
+        />
+      );
+    }
+
     return (
-      <MobileShell
-        title="Analysis Failed"
-        hideNav
-      >
-        <div className="px-4 pt-10">
-          <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-center">
-            <XCircle
-              size={42}
-              className="text-red-600 mx-auto mb-4"
-            />
-
-            <h2 className="font-display font-bold text-lg text-slate-900">
-              Analysis Failed
-            </h2>
-
-            <p className="text-sm text-slate-600 mt-2">
-              {error}
-            </p>
-
-            <button
-              onClick={() =>
-                navigate('capture')
-              }
-              className="w-full h-12 bg-blue-700 text-white font-display font-semibold rounded-xl mt-6"
-            >
-              Capture Again
-            </button>
-          </div>
-        </div>
-      </MobileShell>
+      <Circle size={20} />
     );
-  }
+  };
+
+  /*
+   * --------------------------------------------------
+   * IMAGE COUNT
+   * --------------------------------------------------
+   */
+
+  const imageCount =
+    Object.values(
+      capturedImages
+    ).filter(
+      (file) =>
+        file instanceof File
+    ).length;
+
+  /*
+   * --------------------------------------------------
+   * UI
+   * --------------------------------------------------
+   */
 
   return (
-    <MobileShell
-      title="Analyzing Evidence"
-      hideNav
-    >
-      <div className="px-4 pt-6 pb-8">
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
+      <div className="flex-1 px-6 pt-12 pb-8">
+        <div className="max-w-md mx-auto">
+          <div className="mb-8">
+            <p className="text-sm font-medium text-slate-500 mb-2">
+              INSPECTION ANALYSIS
+            </p>
 
-        {/* Header */}
+            <h1 className="text-2xl font-semibold text-slate-900">
+              Analysing package
+            </h1>
 
-        <div className="text-center mb-8">
-          <div className="w-14 h-14 bg-blue-700 rounded-2xl mx-auto flex items-center justify-center">
-            <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm text-slate-500 mt-2">
+              {imageCount > 0
+                ? `Processing ${imageCount} package image${
+                    imageCount === 1
+                      ? ''
+                      : 's'
+                  }`
+                : 'Processing package image'}
+            </p>
           </div>
 
-          <h1 className="font-display font-bold text-xl text-slate-900 mt-5">
-            Analyzing Package Evidence
-          </h1>
-
-          <p className="text-sm text-slate-500 mt-1">
-            {
-              STEPS[
-                Math.min(
-                  currentStep,
-                  STEPS.length - 1
-                )
-              ].detail
-            }
-          </p>
-        </div>
-
-        {/* Progress list */}
-
-        <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white">
-
-          {STEPS.map((step, index) => {
-            const isDone =
-              index < currentStep ||
-              (
-                backendFinished &&
-                index ===
-                  STEPS.length - 1
-              );
-
-            const isActive =
-              index === currentStep &&
-              !isDone;
-
-            return (
-              <div
-                key={step.label}
-                className={`flex items-center gap-3 px-4 py-4 border-b last:border-b-0 transition-colors ${
-                  isActive
-                    ? 'bg-blue-50'
-                    : 'bg-white'
-                }`}
-              >
-
-                <div className="shrink-0">
-                  {isDone ? (
-                    <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center">
-                      <CheckCircle2
-                        size={14}
-                        className="text-white"
-                      />
-                    </div>
-                  ) : isActive ? (
-                    <div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-                  ) : (
-                    <div className="w-5 h-5 rounded-full border-2 border-slate-200" />
-                  )}
-                </div>
-
-                <div className="min-w-0">
-                  <p
-                    className={`text-sm font-medium ${
-                      isDone
-                        ? 'text-slate-700'
-                        : isActive
-                        ? 'text-blue-700'
-                        : 'text-slate-400'
-                    }`}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+            <div className="space-y-5">
+              {steps.map(
+                (
+                  step,
+                  index
+                ) => (
+                  <div
+                    key={`${step.label}-${index}`}
+                    className="flex items-center gap-4"
                   >
-                    {step.label}
-                  </p>
+                    <div
+                      className={`flex-shrink-0 ${
+                        step.status ===
+                        'pending'
+                          ? 'text-slate-300'
+                          : step.status ===
+                            'active'
+                          ? 'text-slate-700'
+                          : step.status ===
+                            'complete'
+                          ? 'text-emerald-600'
+                          : 'text-red-600'
+                      }`}
+                    >
+                      {renderStatusIcon(
+                        step.status
+                      )}
+                    </div>
 
-                  {isActive && (
-                    <p className="text-xs text-blue-600 mt-0.5">
-                      {step.detail}
-                    </p>
-                  )}
-                </div>
+                    <div className="flex-1">
+                      <p
+                        className={`text-sm ${
+                          step.status ===
+                          'pending'
+                            ? 'text-slate-400'
+                            : step.status ===
+                              'active'
+                            ? 'text-slate-900 font-medium'
+                            : step.status ===
+                              'complete'
+                            ? 'text-slate-700'
+                            : 'text-red-700 font-medium'
+                        }`}
+                      >
+                        {step.label}
+                      </p>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+          </div>
 
-              </div>
-            );
-          })}
+          {error && (
+            <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+              <p className="text-sm font-medium text-red-800">
+                Analysis failed
+              </p>
 
+              <p className="text-sm text-red-700 mt-1">
+                {error}
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(
+                    'capture'
+                  )
+                }
+                className="mt-4 text-sm font-medium text-red-800 underline underline-offset-2"
+              >
+                Capture images again
+              </button>
+            </div>
+          )}
+
+          {!error && (
+            <div className="mt-6 text-center">
+              <p className="text-xs text-slate-400">
+                Nometra is comparing package
+                declarations against the
+                applicable inspection rules.
+              </p>
+            </div>
+          )}
         </div>
-
-        {/* Classification being sent */}
-
-        <div className="mt-5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-          <p className="text-xs text-slate-500">
-            <span className="font-semibold text-slate-700">
-              Classification:
-            </span>{' '}
-            {currentInspection?.product.isImported
-              ? 'Imported'
-              : 'Domestic'}{' '}
-            ·{' '}
-            {currentInspection?.product.saleType ===
-            'institutional_or_industrial'
-              ? 'Institutional / Industrial'
-              : currentInspection?.product.saleType ===
-                'wholesale'
-              ? 'Wholesale'
-              : 'Retail'}
-          </p>
-        </div>
-
-        {/* Backend status */}
-
-        <div className="text-center mt-4">
-          <p className="text-xs text-slate-400">
-            {backendFinished
-              ? 'Analysis completed'
-              : 'Processing package evidence…'}
-          </p>
-        </div>
-
       </div>
-    </MobileShell>
+    </div>
   );
 }

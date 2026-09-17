@@ -17,9 +17,11 @@ Pipeline:
         ↓
     PASS / FAIL / NOT_APPLICABLE
 
-The evaluator also preserves the applicability trace produced by
-applicability/classifier.py so that every compliance decision can
-explain how the rule was selected and evaluated.
+The evaluator preserves:
+    - legal rule metadata
+    - applicability trace
+    - evidence provenance
+    - OCR verification status
 
 Important:
 This project currently implements a limited set of mandatory-declaration
@@ -84,8 +86,8 @@ def evaluate_rules(
         sale_type = retail
 
     This avoids incorrectly inferring that a product is imported
-    merely because a country-of-origin value was extracted from
-    the label.
+    merely because a country-of-origin value was extracted
+    from the label.
     """
 
     # --------------------------------------------------
@@ -170,6 +172,25 @@ def evaluate_rules(
 
 
         # --------------------------------------------------
+        # Common legal-rule metadata
+        # --------------------------------------------------
+
+        rule_metadata = {
+            "source": rule.get(
+                "source"
+            ),
+
+            "implementation_scope": rule.get(
+                "implementation_scope"
+            ),
+
+            "implementation_status": rule.get(
+                "implementation_status"
+            ),
+        }
+
+
+        # --------------------------------------------------
         # 4A. Rule is exempted
         # --------------------------------------------------
 
@@ -183,6 +204,18 @@ def evaluate_rules(
 
                 "legal_reference": rule[
                     "legal_reference"
+                ],
+
+                "source": rule_metadata[
+                    "source"
+                ],
+
+                "implementation_scope": rule_metadata[
+                    "implementation_scope"
+                ],
+
+                "implementation_status": rule_metadata[
+                    "implementation_status"
                 ],
 
                 "field": field_name,
@@ -227,6 +260,18 @@ def evaluate_rules(
 
                 "legal_reference": rule[
                     "legal_reference"
+                ],
+
+                "source": rule_metadata[
+                    "source"
+                ],
+
+                "implementation_scope": rule_metadata[
+                    "implementation_scope"
+                ],
+
+                "implementation_status": rule_metadata[
+                    "implementation_status"
                 ],
 
                 "field": field_name,
@@ -301,6 +346,18 @@ def evaluate_rules(
 
             "legal_reference": rule[
                 "legal_reference"
+            ],
+
+            "source": rule_metadata[
+                "source"
+            ],
+
+            "implementation_scope": rule_metadata[
+                "implementation_scope"
+            ],
+
+            "implementation_status": rule_metadata[
+                "implementation_status"
             ],
 
             "field": field_name,
