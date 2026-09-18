@@ -2,7 +2,7 @@ import os
 import html
 import re
 
-from __main__ import app
+from api.scan import app
 
 from database.inspections import get_inspection_by_id
 
