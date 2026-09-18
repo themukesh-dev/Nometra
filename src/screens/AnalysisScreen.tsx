@@ -527,7 +527,7 @@ export default function AnalysisScreen() {
 
         setSteps((previous) =>
           previous.map(
-            (step, index) =>
+            (step) =>
               step.status ===
                 'active'
                 ? {
@@ -546,7 +546,6 @@ export default function AnalysisScreen() {
   }, [
     capturedImage,
     capturedImages,
-    currentInspection,
     navigate,
     setBackendResult,
     applyBackendResultToInspection,

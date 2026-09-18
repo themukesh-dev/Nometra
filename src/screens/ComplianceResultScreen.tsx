@@ -3,7 +3,6 @@ import {
   XCircle,
   AlertTriangle,
   MinusCircle,
-  Camera,
 } from 'lucide-react';
 import MobileShell from '../components/MobileShell';
 import StatusBadge from '../components/StatusBadge';
@@ -118,7 +117,9 @@ export default function ComplianceResultScreen() {
    * Only actual NON_COMPLIANT findings should
    * appear under "Findings Requiring Attention".
    *
-   * NOT_APPLICABLE is deliberately excluded.
+   * The section is intentionally a compact summary.
+   * Full rule details remain in "Rule Evaluation"
+   * below so the same finding is not displayed twice.
    */
   const criticalFindings = findings.filter(
     (finding) => finding.status === 'NON_COMPLIANT'
@@ -275,45 +276,50 @@ export default function ComplianceResultScreen() {
                 Findings Requiring Attention
               </p>
 
-              <div className="flex flex-col gap-3">
-                {criticalFindings.map((finding) => (
-                  <div
-                    key={finding.id}
-                    className="rounded-xl border px-4 py-3.5 bg-red-50 border-red-200"
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-1.5">
-                      <p className="font-display font-semibold text-sm text-slate-900">
-                        {finding.description}
-                      </p>
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3.5">
+                <div className="flex items-start gap-3">
+                  <XCircle
+                    size={20}
+                    className="text-red-600 shrink-0 mt-0.5"
+                  />
 
-                      <StatusBadge
-                        status={finding.status}
-                        size="sm"
-                      />
+                  <div className="min-w-0">
+                    <p className="font-display font-semibold text-sm text-slate-900">
+                      {criticalFindings.length === 1
+                        ? '1 rule requires inspector review'
+                        : `${criticalFindings.length} rules require inspector review`}
+                    </p>
+
+                    <div className="mt-2 space-y-1.5">
+                      {criticalFindings.map((finding) => (
+                        <div
+                          key={finding.id}
+                          className="flex items-start gap-2"
+                        >
+                          <span className="text-red-500 mt-0.5">
+                            •
+                          </span>
+
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-slate-800">
+                              {finding.description}
+                            </p>
+
+                            {finding.legalReference && (
+                              <p className="text-[10px] text-slate-500 mt-0.5">
+                                {finding.legalReference}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                     </div>
 
-                    <p className="text-xs text-slate-600 mb-1.5">
-                      {finding.explanation}
+                    <p className="text-[11px] text-red-700 mt-2.5 font-medium">
+                      See Rule Evaluation below for evidence and decision trace.
                     </p>
-
-                    {finding.extractedValue && (
-                      <p className="text-xs text-slate-500 font-medium">
-                        Extracted value:{' '}
-                        {finding.extractedValue}
-                      </p>
-                    )}
-
-                    <p className="text-[11px] text-slate-400 mt-2">
-                      {finding.legalReference}
-                    </p>
-
-                    {finding.recommendation && (
-                      <p className="text-xs text-blue-700 mt-1.5 font-medium">
-                        {finding.recommendation}
-                      </p>
-                    )}
                   </div>
-                ))}
+                </div>
               </div>
             </div>
           )}

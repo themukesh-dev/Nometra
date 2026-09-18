@@ -1,5 +1,6 @@
 import os
 import html
+import re
 
 from __main__ import app
 
@@ -59,12 +60,21 @@ def _final_status_for_result(
         REQUEST_EVIDENCE
             Finding requires additional evidence.
 
+    A NOT_APPLICABLE rule remains NOT_APPLICABLE when the
+    inspector confirms it. It is not converted into PASS.
+
     If no inspector decision exists, the original automated
     status is preserved.
     """
 
     if not decision:
         return system_status
+
+    if (
+        system_status == "NOT_APPLICABLE"
+        and decision == "CONFIRM"
+    ):
+        return "NOT_APPLICABLE"
 
     if decision == "CONFIRM":
         return "PASS"
@@ -92,10 +102,16 @@ def _display_status(
     When an inspector has reviewed a finding, the final
     reviewed status is shown together with the inspector
     decision so the automated assessment remains auditable.
+
+    The system assessment is not replaced in the stored
+    inspection record; only the displayed final status is
+    changed according to the inspector decision.
     """
 
     if not decision:
-        return final_status
+        return html.escape(
+            str(final_status)
+        )
 
     decision_label = decision.replace(
         "_",
@@ -103,9 +119,112 @@ def _display_status(
     )
 
     return (
-        f"{final_status}<br/>"
+        f"{html.escape(str(final_status))}<br/>"
         f"<font size='6'>Inspector: "
         f"{html.escape(decision_label)}</font>"
+    )
+
+
+def _resolve_review_key(
+    result: dict,
+    result_index: int,
+    inspector_decisions: dict,
+) -> str | None:
+    """
+    Resolves an inspector decision to a compliance result.
+
+    The frontend currently stores inspector decisions using
+    finding IDs such as:
+
+        FND-BE-001
+        FND-BE-005
+
+    while the compliance engine uses rule IDs such as:
+
+        LM-MRP-01
+        LM-COO-01
+
+    First try the rule ID directly.
+
+    Then support the current backend finding-ID convention,
+    where the numeric portion of FND-BE-XXX corresponds to
+    the one-based position of the compliance result.
+
+    Example:
+
+        result index 0 -> FND-BE-001
+        result index 4 -> FND-BE-005
+
+    This keeps the report compatible with the existing
+    InspectorReviewScreen without changing the frontend
+    review workflow.
+    """
+
+    rule_id = result.get(
+        "rule_id"
+    )
+
+    if (
+        rule_id
+        and rule_id in inspector_decisions
+    ):
+        return rule_id
+
+    finding_id = (
+        f"FND-BE-{result_index + 1:03d}"
+    )
+
+    if finding_id in inspector_decisions:
+        return finding_id
+
+    # Defensive fallback: if the decision object contains
+    # an FND-BE key whose numeric suffix matches this result.
+    for key in inspector_decisions:
+        if not isinstance(key, str):
+            continue
+
+        match = re.fullmatch(
+            r"FND-BE-(\d+)",
+            key,
+        )
+
+        if not match:
+            continue
+
+        try:
+            finding_number = int(
+                match.group(1)
+            )
+        except ValueError:
+            continue
+
+        if finding_number == result_index + 1:
+            return key
+
+    return None
+
+
+def _get_review_value(
+    result: dict,
+    result_index: int,
+    review_data: dict,
+):
+    """
+    Resolves either a rule-ID key or the current FND-BE
+    finding-ID key from a persisted inspector review object.
+    """
+
+    key = _resolve_review_key(
+        result,
+        result_index,
+        review_data,
+    )
+
+    if key is None:
+        return None
+
+    return review_data.get(
+        key
     )
 
 
@@ -117,19 +236,32 @@ def download_report_pdf(inspection_id):
 
     The PDF uses the persisted inspector review when
     determining the final displayed status of each rule.
+
     The original automated assessment remains available
-    through the stored inspection record.
+    through the stored inspection record and is shown
+    implicitly through the final-status / inspector-decision
+    trace in the rule table.
     """
 
-    inspection = get_inspection_by_id(inspection_id)
+    inspection = get_inspection_by_id(
+        inspection_id
+    )
 
     if inspection is None:
         return jsonify({
-            "error": f"No inspection found with id {inspection_id}"
+            "error": (
+                f"No inspection found with id "
+                f"{inspection_id}"
+            )
         }), 404
 
-    compliance_report = inspection["compliance_report"]
-    extracted_data = inspection["extracted_data"]
+    compliance_report = inspection[
+        "compliance_report"
+    ]
+
+    extracted_data = inspection[
+        "extracted_data"
+    ]
 
     inspector_decisions = inspection.get(
         "inspector_decisions",
@@ -150,7 +282,10 @@ def download_report_pdf(inspection_id):
         "final_status"
     )
 
+    # ---------------------------------------------------------
     # Save PDF inside the backend folder
+    # ---------------------------------------------------------
+
     pdf_path = os.path.join(
         os.path.dirname(
             os.path.dirname(
@@ -241,14 +376,14 @@ def download_report_pdf(inspection_id):
     story.append(
         Paragraph(
             "NOMETRA",
-            title_style
+            title_style,
         )
     )
 
     story.append(
         Paragraph(
             "Legal Metrology Inspection Report",
-            subtitle_style
+            subtitle_style,
         )
     )
 
@@ -265,7 +400,7 @@ def download_report_pdf(inspection_id):
     story.append(
         Spacer(
             1,
-            6
+            6,
         )
     )
 
@@ -275,24 +410,28 @@ def download_report_pdf(inspection_id):
 
     results = compliance_report.get(
         "results",
-        []
+        [],
     )
 
     final_results = []
 
-    for result in results:
+    for result_index, result in enumerate(
+        results
+    ):
         rule_id = result.get(
             "rule_id",
-            "-"
+            "-",
         )
 
         system_status = result.get(
             "status",
-            "-"
+            "-",
         )
 
-        decision = inspector_decisions.get(
-            rule_id
+        decision = _get_review_value(
+            result,
+            result_index,
+            inspector_decisions,
         )
 
         final_status = _final_status_for_result(
@@ -300,11 +439,27 @@ def download_report_pdf(inspection_id):
             decision,
         )
 
+        review_key = _resolve_review_key(
+            result,
+            result_index,
+            inspector_decisions,
+        )
+
+        note = ""
+
+        if review_key is not None:
+            note = inspector_notes.get(
+                review_key,
+                "",
+            )
+
         final_results.append({
             "result": result,
             "system_status": system_status,
             "decision": decision,
             "final_status": final_status,
+            "review_key": review_key,
+            "note": note,
         })
 
     # ---------------------------------------------------------
@@ -313,6 +468,7 @@ def download_report_pdf(inspection_id):
 
     if stored_final_status:
         overall_status = stored_final_status
+
     else:
         final_statuses = [
             item["final_status"]
@@ -321,8 +477,15 @@ def download_report_pdf(inspection_id):
 
         if "FAIL" in final_statuses:
             overall_status = "NON_COMPLIANT"
-        elif "VERIFICATION_REQUIRED" in final_statuses:
-            overall_status = "VERIFICATION_REQUIRED"
+
+        elif (
+            "VERIFICATION_REQUIRED"
+            in final_statuses
+        ):
+            overall_status = (
+                "VERIFICATION_REQUIRED"
+            )
+
         else:
             overall_status = "COMPLIANT"
 
@@ -336,6 +499,13 @@ def download_report_pdf(inspection_id):
         1
         for item in final_results
         if item["final_status"] == "FAIL"
+    )
+
+    final_not_applicable = sum(
+        1
+        for item in final_results
+        if item["final_status"]
+        == "NOT_APPLICABLE"
     )
 
     final_verification_required = sum(
@@ -358,6 +528,13 @@ def download_report_pdf(inspection_id):
                 f"{final_verification_required}"
                 if final_verification_required > 0
                 else ""
+            )
+            + (
+                f" &nbsp;&nbsp;&nbsp;"
+                f"<b>Not Applicable:</b> "
+                f"{final_not_applicable}"
+                if final_not_applicable > 0
+                else ""
             ),
             normal_style,
         )
@@ -370,7 +547,7 @@ def download_report_pdf(inspection_id):
     story.append(
         Paragraph(
             "Extracted Product Information",
-            heading_style
+            heading_style,
         )
     )
 
@@ -378,21 +555,30 @@ def download_report_pdf(inspection_id):
         ("MRP", "mrp"),
         ("Net Quantity", "net_quantity"),
         ("Manufacturer Name", "manufacturer_name"),
-        ("Manufacturer Address", "manufacturer_address"),
+        (
+            "Manufacturer Address",
+            "manufacturer_address",
+        ),
         ("Consumer Care", "consumer_care"),
-        ("Date of Manufacture", "date_of_manufacture"),
-        ("Country of Origin", "country_of_origin"),
+        (
+            "Date of Manufacture",
+            "date_of_manufacture",
+        ),
+        (
+            "Country of Origin",
+            "country_of_origin",
+        ),
     ]
 
     product_table_data = [
         [
             Paragraph(
                 "<b>Field</b>",
-                header_style
+                header_style,
             ),
             Paragraph(
                 "<b>Extracted Value</b>",
-                header_style
+                header_style,
             ),
         ]
     ]
@@ -400,10 +586,13 @@ def download_report_pdf(inspection_id):
     for display_name, field_name in product_fields:
         field_data = extracted_data.get(
             field_name,
-            {}
+            {},
         )
 
-        if isinstance(field_data, dict):
+        if isinstance(
+            field_data,
+            dict,
+        ):
             value = field_data.get(
                 "value"
             )
@@ -443,49 +632,51 @@ def download_report_pdf(inspection_id):
                 "BACKGROUND",
                 (0, 0),
                 (-1, 0),
-                colors.lightgrey
+                colors.lightgrey,
             ),
             (
                 "GRID",
                 (0, 0),
                 (-1, -1),
                 0.5,
-                colors.grey
+                colors.grey,
             ),
             (
                 "VALIGN",
                 (0, 0),
                 (-1, -1),
-                "TOP"
+                "TOP",
             ),
             (
                 "LEFTPADDING",
                 (0, 0),
                 (-1, -1),
-                4
+                4,
             ),
             (
                 "RIGHTPADDING",
                 (0, 0),
                 (-1, -1),
-                4
+                4,
             ),
             (
                 "TOPPADDING",
                 (0, 0),
                 (-1, -1),
-                4
+                4,
             ),
             (
                 "BOTTOMPADDING",
                 (0, 0),
                 (-1, -1),
-                4
+                4,
             ),
         ])
     )
 
-    story.append(product_table)
+    story.append(
+        product_table
+    )
 
     # ---------------------------------------------------------
     # Rule Evaluation
@@ -494,7 +685,7 @@ def download_report_pdf(inspection_id):
     story.append(
         Paragraph(
             "Rule Evaluation",
-            heading_style
+            heading_style,
         )
     )
 
@@ -502,19 +693,19 @@ def download_report_pdf(inspection_id):
         [
             Paragraph(
                 "<b>Rule ID</b>",
-                header_style
+                header_style,
             ),
             Paragraph(
                 "<b>Requirement</b>",
-                header_style
+                header_style,
             ),
             Paragraph(
                 "<b>Status</b>",
-                header_style
+                header_style,
             ),
             Paragraph(
                 "<b>Extracted Value</b>",
-                header_style
+                header_style,
             ),
         ]
     ]
@@ -524,12 +715,12 @@ def download_report_pdf(inspection_id):
 
         rule_id = result.get(
             "rule_id",
-            "-"
+            "-",
         )
 
         description = result.get(
             "description",
-            "-"
+            "-",
         )
 
         final_status = item[
@@ -597,44 +788,44 @@ def download_report_pdf(inspection_id):
             "BACKGROUND",
             (0, 0),
             (-1, 0),
-            colors.lightgrey
+            colors.lightgrey,
         ),
         (
             "GRID",
             (0, 0),
             (-1, -1),
             0.5,
-            colors.grey
+            colors.grey,
         ),
         (
             "VALIGN",
             (0, 0),
             (-1, -1),
-            "TOP"
+            "TOP",
         ),
         (
             "LEFTPADDING",
             (0, 0),
             (-1, -1),
-            4
+            4,
         ),
         (
             "RIGHTPADDING",
             (0, 0),
             (-1, -1),
-            4
+            4,
         ),
         (
             "TOPPADDING",
             (0, 0),
             (-1, -1),
-            5
+            5,
         ),
         (
             "BOTTOMPADDING",
             (0, 0),
             (-1, -1),
-            5
+            5,
         ),
     ]
 
@@ -644,7 +835,7 @@ def download_report_pdf(inspection_id):
 
     for row_index, item in enumerate(
         final_results,
-        start=1
+        start=1,
     ):
         final_status = item[
             "final_status"
@@ -656,7 +847,7 @@ def download_report_pdf(inspection_id):
                     "BACKGROUND",
                     (2, row_index),
                     (2, row_index),
-                    colors.lightgreen
+                    colors.lightgreen,
                 )
             )
 
@@ -666,7 +857,7 @@ def download_report_pdf(inspection_id):
                     "BACKGROUND",
                     (2, row_index),
                     (2, row_index),
-                    colors.lightcoral
+                    colors.lightcoral,
                 )
             )
 
@@ -676,17 +867,20 @@ def download_report_pdf(inspection_id):
                     "BACKGROUND",
                     (2, row_index),
                     (2, row_index),
-                    colors.lightgrey
+                    colors.lightgrey,
                 )
             )
 
-        elif final_status == "VERIFICATION_REQUIRED":
+        elif (
+            final_status
+            == "VERIFICATION_REQUIRED"
+        ):
             rule_table_style.append(
                 (
                     "BACKGROUND",
                     (2, row_index),
                     (2, row_index),
-                    colors.lightyellow
+                    colors.lightyellow,
                 )
             )
 
@@ -696,7 +890,9 @@ def download_report_pdf(inspection_id):
         )
     )
 
-    story.append(rule_table)
+    story.append(
+        rule_table
+    )
 
     # ---------------------------------------------------------
     # Inspector Review
@@ -710,7 +906,7 @@ def download_report_pdf(inspection_id):
         story.append(
             Paragraph(
                 "Inspector Review",
-                heading_style
+                heading_style,
             )
         )
 
@@ -719,25 +915,27 @@ def download_report_pdf(inspection_id):
                 [
                     Paragraph(
                         "<b>Rule ID</b>",
-                        header_style
+                        header_style,
                     ),
                     Paragraph(
                         "<b>Inspector Decision</b>",
-                        header_style
+                        header_style,
                     ),
                     Paragraph(
                         "<b>Inspector Note</b>",
-                        header_style
+                        header_style,
                     ),
                 ]
             ]
 
             for item in final_results:
-                result = item["result"]
+                result = item[
+                    "result"
+                ]
 
                 rule_id = result.get(
                     "rule_id",
-                    "-"
+                    "-",
                 )
 
                 decision = item[
@@ -747,10 +945,9 @@ def download_report_pdf(inspection_id):
                 if not decision:
                     continue
 
-                note = inspector_notes.get(
-                    rule_id,
-                    ""
-                )
+                note = item[
+                    "note"
+                ]
 
                 review_table_data.append([
                     Paragraph(
@@ -763,7 +960,7 @@ def download_report_pdf(inspection_id):
                         html.escape(
                             decision.replace(
                                 "_",
-                                " "
+                                " ",
                             )
                         ),
                         normal_style,
@@ -778,7 +975,9 @@ def download_report_pdf(inspection_id):
                     ),
                 ])
 
-            if len(review_table_data) > 1:
+            if len(
+                review_table_data
+            ) > 1:
                 review_table = Table(
                     review_table_data,
                     colWidths=[
@@ -795,44 +994,44 @@ def download_report_pdf(inspection_id):
                             "BACKGROUND",
                             (0, 0),
                             (-1, 0),
-                            colors.lightgrey
+                            colors.lightgrey,
                         ),
                         (
                             "GRID",
                             (0, 0),
                             (-1, -1),
                             0.5,
-                            colors.grey
+                            colors.grey,
                         ),
                         (
                             "VALIGN",
                             (0, 0),
                             (-1, -1),
-                            "TOP"
+                            "TOP",
                         ),
                         (
                             "LEFTPADDING",
                             (0, 0),
                             (-1, -1),
-                            4
+                            4,
                         ),
                         (
                             "RIGHTPADDING",
                             (0, 0),
                             (-1, -1),
-                            4
+                            4,
                         ),
                         (
                             "TOPPADDING",
                             (0, 0),
                             (-1, -1),
-                            4
+                            4,
                         ),
                         (
                             "BOTTOMPADDING",
                             (0, 0),
                             (-1, -1),
-                            4
+                            4,
                         ),
                     ])
                 )
@@ -845,7 +1044,7 @@ def download_report_pdf(inspection_id):
             story.append(
                 Spacer(
                     1,
-                    6
+                    6,
                 )
             )
 
@@ -873,7 +1072,7 @@ def download_report_pdf(inspection_id):
         story.append(
             Paragraph(
                 "Evidence Integrity",
-                heading_style
+                heading_style,
             )
         )
 
@@ -895,7 +1094,7 @@ def download_report_pdf(inspection_id):
     story.append(
         Spacer(
             1,
-            10
+            10,
         )
     )
 
@@ -915,7 +1114,9 @@ def download_report_pdf(inspection_id):
     # Build PDF
     # ---------------------------------------------------------
 
-    doc.build(story)
+    doc.build(
+        story
+    )
 
     return send_file(
         pdf_path,

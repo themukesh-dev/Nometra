@@ -1,44 +1,49 @@
 # backend/extraction/ocr.py
 
 import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 from PIL import Image
 
-# ---- WINDOWS USERS ONLY ----
-# If you're on Windows, uncomment the line below and set it to your actual
-# install path, otherwise pytesseract won't be able to find the engine.
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# ---------------------------------------------------------------------------
+# TESSERACT CONFIGURATION
+# ---------------------------------------------------------------------------
+
+pytesseract.pytesseract.tesseract_cmd = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+)
 
 
-def extract_text_ocr(image_path: str) -> dict:
+def extract_text_ocr(image_path: str) -> str:
     """
     Takes a path to a label image, runs it through Tesseract OCR,
-    and returns the raw text it found.
+    and returns the raw OCR text as a string.
 
-    This is our fallback/cross-check method — it doesn't understand
-    what the text MEANS (no "this is the MRP" labeling like Gemini gives us),
-    it just reads every bit of text it can see on the image, in order.
+    Tesseract does not interpret the meaning of the text. It simply
+    returns the text it can read from the image. The evidence-fusion
+    layer later uses this raw text as an independent cross-check
+    against Gemini Vision extraction.
     """
+
     try:
         image = Image.open(image_path)
 
-        # This is the actual OCR call — Tesseract scans the image
-        # and returns everything it can read as one big string.
+        # Run Tesseract and return its raw text directly.
         raw_text = pytesseract.image_to_string(image)
 
-        return {
-            "raw_text": raw_text.strip(),
-            "source": "ocr"
-        }
+        return raw_text.strip()
 
     except Exception as e:
-        return {
-            "error": str(e),
-            "source": "ocr"
-        }
+        # Keep the return type consistent with the function contract.
+        # The caller expects OCR text, so return an empty string when
+        # OCR fails rather than returning a dictionary.
+        print(f"Tesseract OCR error: {e}")
+        return ""
 
 
-# Standalone test runner — same pattern as gemini_vision.py
+# ---------------------------------------------------------------------------
+# STANDALONE TEST RUNNER
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     import sys
 
@@ -46,4 +51,4 @@ if __name__ == "__main__":
         print("Usage: python ocr.py <path_to_image>")
     else:
         result = extract_text_ocr(sys.argv[1])
-        print(result["raw_text"] if "raw_text" in result else result)
+        print(result)

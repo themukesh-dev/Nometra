@@ -18,6 +18,7 @@ export default function CaptureScreen() {
     capturedSides,
     setCapturedSides,
     setCapturedImage,
+    setCapturedImageForSide,
   } = useApp();
 
   const [flash, setFlash] = useState(false);
@@ -266,7 +267,10 @@ export default function CaptureScreen() {
           }
         );
 
+        // Store the image both as the legacy captured image and
+        // against the exact package side for multi-view analysis.
         setCapturedImage(file);
+        setCapturedImageForSide(currentSide, file);
 
         // Create preview
         if (previewUrl) {
@@ -300,7 +304,10 @@ export default function CaptureScreen() {
   const handleFileSelected = (file: File) => {
     stopCamera();
 
+    // Store the image both as the legacy captured image and
+    // against the exact package side for multi-view analysis.
     setCapturedImage(file);
+    setCapturedImageForSide(currentSide, file);
 
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);

@@ -411,9 +411,24 @@ export function AppProvider({
   const [remarksText, setRemarksText] =
     useState('');
 
-  const navigate = (s: Screen) => {
+  /*
+   * --------------------------------------------------
+   * NAVIGATION
+   * --------------------------------------------------
+   *
+   * IMPORTANT:
+   * useCallback keeps the navigate function stable
+   * between AppContext re-renders.
+   *
+   * AnalysisScreen depends on navigate inside its
+   * analysis useEffect. Without useCallback, every
+   * context update creates a new navigate function,
+   * causing that effect to restart/cancel.
+   */
+
+  const navigate = useCallback((s: Screen) => {
     setScreen(s);
-  };
+  }, []);
 
   /*
    * --------------------------------------------------

@@ -288,44 +288,47 @@ def _candidate_is_better(
     existing: dict,
 ) -> bool:
     """
-    Determines which extracted field should
-    become the primary value when the same field
-    is found on multiple package sides.
+    Determines which extracted field should become
+    the primary value when the same field is found
+    on multiple package sides.
 
     Priority:
 
-        1. Non-empty value
-        2. OCR verified
-        3. Existing value otherwise
+        1. A non-empty candidate replaces an empty
+           existing value.
+        2. An OCR-verified candidate replaces an
+           unverified existing value.
+        3. Otherwise keep the existing value.
 
-    This deliberately does not use an opaque
-    confidence score to silently choose between
-    conflicting legal evidence.
+    Empty candidates never replace useful evidence.
     """
 
-    candidate_value = (
-        candidate.get("value")
+    candidate_value = candidate.get("value")
+    existing_value = existing.get("value")
+
+    candidate_has_value = (
+        candidate_value is not None
+        and str(candidate_value).strip() != ""
     )
 
-    existing_value = (
-        existing.get("value")
+    existing_has_value = (
+        existing_value is not None
+        and str(existing_value).strip() != ""
     )
 
-    if (
-        not existing_value
-        and candidate_value
-    ):
+    # Critical multi-view rule:
+    # a valid value from a later package side must
+    # replace a null/empty value from an earlier side.
+    if candidate_has_value and not existing_has_value:
         return True
 
+    # Prefer independently OCR-verified evidence
+    # when both candidates already contain values.
     if (
-        candidate.get(
-            "verified_by_ocr",
-            False,
-        )
-        and not existing.get(
-            "verified_by_ocr",
-            False,
-        )
+        candidate_has_value
+        and existing_has_value
+        and candidate.get("verified_by_ocr", False)
+        and not existing.get("verified_by_ocr", False)
     ):
         return True
 
@@ -341,23 +344,55 @@ def _values_are_different(
     conflict with one another.
     """
 
-    first_value = first.get(
-        "value"
-    )
-
-    second_value = second.get(
-        "value"
-    )
+    first_value = first.get("value")
+    second_value = second.get("value")
 
     if (
-        not first_value
-        or not second_value
+        first_value is None
+        or str(first_value).strip() == ""
+        or second_value is None
+        or str(second_value).strip() == ""
     ):
         return False
 
     return (
         str(first_value).strip().lower()
         != str(second_value).strip().lower()
+    )
+
+
+def _record_conflict(
+    conflicts: dict,
+    field: str,
+    candidate: dict,
+):
+    """
+    Records a non-empty candidate that conflicts
+    with another non-empty value already observed.
+    """
+
+    conflicts.setdefault(
+        field,
+        [],
+    )
+
+    conflicts[field].append(
+        {
+            "side": candidate.get(
+                "source_side"
+            ),
+            "value": candidate.get(
+                "value"
+            ),
+            "source": candidate.get(
+                "source"
+            ),
+            "verified_by_ocr":
+                candidate.get(
+                    "verified_by_ocr",
+                    False,
+                ),
+        }
     )
 
 
@@ -368,56 +403,26 @@ def _merge_multiview_evidence(
     Combines evidence extracted independently
     from each package side.
 
-    Example input:
+    Empty/null evidence from one side must never
+    block valid evidence from another side.
 
-        [
-            {
-                "side": "FRONT",
-                "evidence": {
-                    "mrp": {...},
-                    "net_quantity": {...}
-                }
-            },
-            {
-                "side": "BACK",
-                "evidence": {
-                    "manufacturer_name": {...},
-                    "consumer_care": {...}
-                }
-            }
-        ]
+    When two non-empty values differ, the additional
+    value is retained in the conflict structure.
 
-    Example output:
-
-        {
-            "mrp": {
-                "value": "₹10.00",
-                "source": "gemini_vision",
-                "source_side": "FRONT",
-                ...
-            },
-
-            "manufacturer_name": {
-                "value": "...",
-                "source_side": "BACK",
-                ...
-            }
-        }
-
-    Conflicting values are retained in a separate
-    multi-view conflict structure rather than being
-    silently discarded.
+    The selected primary value keeps its source_side
+    so the frontend can show which package view
+    supplied the evidence.
     """
 
     merged = {}
-
     conflicts = {}
 
     for side_result in per_side_evidence:
 
-        side = side_result[
-            "side"
-        ]
+        side = side_result.get(
+            "side",
+            "UNKNOWN",
+        )
 
         evidence = (
             side_result.get(
@@ -450,6 +455,16 @@ def _merge_multiview_evidence(
                 "source_side"
             ] = side
 
+            candidate_value = candidate.get(
+                "value"
+            )
+
+            candidate_has_value = (
+                candidate_value is not None
+                and str(candidate_value).strip() != ""
+            )
+
+            # First observation of the field.
             if field not in merged:
 
                 merged[field] = candidate
@@ -458,37 +473,62 @@ def _merge_multiview_evidence(
 
             existing = merged[field]
 
-            if _values_are_different(
-                candidate,
-                existing,
+            existing_value = existing.get(
+                "value"
+            )
+
+            existing_has_value = (
+                existing_value is not None
+                and str(existing_value).strip() != ""
+            )
+
+            # Only compare actual evidence values.
+            # Null/empty candidates are ignored and
+            # therefore cannot create false conflicts.
+            if (
+                candidate_has_value
+                and existing_has_value
+                and _values_are_different(
+                    candidate,
+                    existing,
+                )
             ):
 
-                conflicts.setdefault(
+                _record_conflict(
+                    conflicts,
                     field,
-                    [],
+                    candidate,
                 )
 
-                conflicts[field].append(
-                    {
-                        "side": side,
-                        "value": candidate.get(
-                            "value"
-                        ),
-                        "source": candidate.get(
-                            "source"
-                        ),
-                        "verified_by_ocr":
-                            candidate.get(
-                                "verified_by_ocr",
-                                False,
-                            ),
-                    }
-                )
-
+            # Replace an empty primary value with a
+            # valid value from this package side, or
+            # prefer OCR-verified evidence when both
+            # values are present.
             if _candidate_is_better(
                 candidate,
                 existing,
             ):
+
+                # If the existing value was itself a
+                # real value and differs, retain it as
+                # a conflict when the candidate replaces it.
+                if (
+                    existing_has_value
+                    and candidate_has_value
+                    and _values_are_different(
+                        candidate,
+                        existing,
+                    )
+                ):
+                    existing_conflict = dict(
+                        existing
+                    )
+
+                    _record_conflict(
+                        conflicts,
+                        field,
+                        existing_conflict,
+                    )
 
                 merged[field] = candidate
 
@@ -920,6 +960,18 @@ def scan_label():
                 )
             )
 
+            print(
+                "FUSED NON-EMPTY FIELDS:",
+                [
+                    field_name
+                    for field_name, field_value
+                    in fused_side_evidence.items()
+                    if isinstance(field_value, dict)
+                    and field_value.get("value") is not None
+                    and str(field_value.get("value")).strip() != ""
+                ],
+            )
+
             per_side_evidence.append(
                 {
                     "side": side,
@@ -934,13 +986,20 @@ def scan_label():
                     "side": side,
 
                     "gemini_fields":
-                        len(
-                            gemini_result
-                            if isinstance(
-                                gemini_result,
-                                dict,
+                        sum(
+                            1
+                            for field_name, field_value
+                            in (
+                                gemini_result.items()
+                                if isinstance(
+                                    gemini_result,
+                                    dict,
+                                )
+                                else []
                             )
-                            else {}
+                            if field_name != "source"
+                            and field_value is not None
+                            and str(field_value).strip() != ""
                         ),
 
                     "ocr_result_available":
