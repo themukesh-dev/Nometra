@@ -342,13 +342,21 @@ export default function AnalysisScreen() {
        * ------------------------------------------------
        * BACKEND REQUEST
        * ------------------------------------------------
+       *
+       * IMPORTANT:
+       *
+       * Use the relative /api/scan endpoint.
+       *
+       * Vercel routes /api/* to the deployed backend
+       * service. This works on mobile and does not
+       * point to the phone's own localhost.
        */
 
       let response: Response;
 
       try {
         response = await fetch(
-          'http://127.0.0.1:5000/scan',
+          '/api/scan',
           {
             method: 'POST',
             body: formData,
@@ -361,7 +369,7 @@ export default function AnalysisScreen() {
         );
 
         throw new Error(
-          'Unable to connect to the Nometra backend. Make sure the Flask server is running on port 5000.'
+          'Unable to connect to the Nometra backend. Please check the deployed backend service.'
         );
       }
 
