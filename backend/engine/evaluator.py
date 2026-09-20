@@ -1,11 +1,11 @@
-# backend/engine/evaluator.py
-
 """
 Compliance rule evaluator.
 
 Pipeline:
 
     Classification
+        ↓
+    Package Evidence
         ↓
     Rule applicability
         ↓
@@ -57,6 +57,7 @@ from applicability.classifier import (
 
 from classification.categories import (
     build_classification,
+    build_classification_from_evidence,
 )
 
 from classification.category_validator import (
@@ -73,21 +74,18 @@ def evaluate_rules(
     classification: dict | None = None,
 ) -> dict:
     """
-    Evaluates the mandatory declaration rules against
+    Evaluates mandatory declaration rules against
     fused evidence.
 
-    Classification determines which rules are applicable
-    and required.
+    If no classification is supplied, classification is
+    resolved from the package evidence.
 
-    If no classification is supplied, the project's default
-    classification is used:
+    The current prototype uses:
 
-        origin = domestic
-        sale_type = retail
+        - evidence-derived origin
+        - internal retail sale-type default
 
-    This avoids incorrectly inferring that a product is imported
-    merely because a country-of-origin value was extracted
-    from the label.
+    The inspector does not manually select origin or sale type.
     """
 
     # --------------------------------------------------
@@ -96,7 +94,11 @@ def evaluate_rules(
 
     if classification is None:
 
-        classification = build_classification()
+        classification = (
+            build_classification_from_evidence(
+                fused_evidence
+            )
+        )
 
 
     # --------------------------------------------------
@@ -122,7 +124,8 @@ def evaluate_rules(
     # --------------------------------------------------
 
     applicable_rules = get_applicable_rules(
-        classification
+        classification,
+        fused_evidence,
     )
 
 
@@ -280,7 +283,8 @@ def evaluate_rules(
 
                 "reason": (
                     "This rule is not required for "
-                    "the package classification."
+                    "the package classification and "
+                    "no applicable evidence was detected."
                 ),
 
                 "extracted_value": field_data.get(
@@ -514,9 +518,6 @@ if __name__ == "__main__":
     print("STEP 4 — RULE EVALUATION")
     print("=" * 70)
 
-
-    # Default classification:
-    # domestic + retail
     report = evaluate_rules(
         fused
     )

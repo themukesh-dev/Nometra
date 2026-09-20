@@ -24,54 +24,69 @@ export default function AnalysisScreen() {
   const {
     navigate,
     capturedImage,
-    capturedImages,
     currentInspection,
     setBackendResult,
     applyBackendResultToInspection,
     setAnalysisStep,
   } = useApp();
 
-  const [steps, setSteps] = useState<
-    AnalysisStep[]
-  >([
-    {
-      label: 'Images received',
-      status: 'pending',
-    },
-    {
-      label: 'Image quality verified',
-      status: 'pending',
-    },
-    {
-      label: 'Text extracted',
-      status: 'pending',
-    },
-    {
-      label: 'Declarations identified',
-      status: 'pending',
-    },
-    {
-      label:
-        'Determining applicable requirements',
-      status: 'pending',
-    },
-    {
-      label: 'Evaluating compliance',
-      status: 'pending',
-    },
-    {
-      label: 'Linking findings to evidence',
-      status: 'pending',
-    },
-  ]);
+  /*
+   * ==================================================
+   * CLASSIFICATION
+   * ==================================================
+   */
+
+  const category =
+    currentInspection?.product?.category ??
+    'Other';
+
+  /*
+   * ==================================================
+   * ANALYSIS STEPS
+   * ==================================================
+   */
+
+  const [steps, setSteps] =
+    useState<AnalysisStep[]>([
+      {
+        label: 'Image received',
+        status: 'pending',
+      },
+      {
+        label: 'Image quality verified',
+        status: 'pending',
+      },
+      {
+        label: 'Text extracted',
+        status: 'pending',
+      },
+      {
+        label: 'Declarations identified',
+        status: 'pending',
+      },
+      {
+        label:
+          'Determining applicable requirements',
+        status: 'pending',
+      },
+      {
+        label: 'Evaluating compliance',
+        status: 'pending',
+      },
+      {
+        label:
+          'Linking findings to evidence',
+        status: 'pending',
+      },
+    ]);
 
   const [error, setError] =
     useState<string | null>(null);
 
   /*
-   * --------------------------------------------------
-   * HELPERS
-   * --------------------------------------------------
+   * ==================================================
+   * UPDATE ANALYSIS STEP
+   * ==================================================
    */
 
   const updateStep = (
@@ -79,13 +94,14 @@ export default function AnalysisScreen() {
     status: AnalysisStatus
   ) => {
     setSteps((previous) =>
-      previous.map((step, stepIndex) =>
-        stepIndex === index
-          ? {
-              ...step,
-              status,
-            }
-          : step
+      previous.map(
+        (step, stepIndex) =>
+          stepIndex === index
+            ? {
+                ...step,
+                status,
+              }
+            : step
       )
     );
 
@@ -93,441 +109,405 @@ export default function AnalysisScreen() {
   };
 
   /*
-   * --------------------------------------------------
-   * RUN BACKEND ANALYSIS
-   * --------------------------------------------------
+   * ==================================================
+   * RUN ANALYSIS
+   * ==================================================
    */
 
   useEffect(() => {
-    let cancelled = false;
+    console.log(
+      'ANALYSIS: Starting analysis'
+    );
+
+    const wait = (
+      milliseconds: number
+    ) =>
+      new Promise<void>((resolve) =>
+        setTimeout(
+          resolve,
+          milliseconds
+        )
+      );
 
     const runAnalysis = async () => {
-      setError(null);
+      try {
+        setError(null);
 
-      /*
-       * ------------------------------------------------
-       * COLLECT ALL CAPTURED IMAGES
-       * ------------------------------------------------
-       *
-       * capturedImages contains:
-       *
-       * {
-       *   FRONT: File,
-       *   BACK: File,
-       *   LEFT: File,
-       *   RIGHT: File,
-       *   BOTTOM: File
-       * }
-       *
-       * We send every available image.
-       */
+        /*
+         * ==================================================
+         * VALIDATE IMAGE
+         * ==================================================
+         */
 
-      const multiViewEntries =
-        Object.entries(capturedImages).filter(
-          (
-            entry
-          ): entry is [
-            string,
-            File
-          ] =>
-            entry[1] instanceof File
-        );
-
-      /*
-       * ------------------------------------------------
-       * SINGLE IMAGE FALLBACK
-       * ------------------------------------------------
-       *
-       * This keeps the existing flow working if
-       * capturedImages is empty but capturedImage exists.
-       */
-
-      if (
-        multiViewEntries.length === 0 &&
-        !capturedImage
-      ) {
-        setError(
-          'No package image was captured. Please capture at least one image.'
-        );
-
-        updateStep(0, 'error');
-
-        return;
-      }
-
-      /*
-       * ------------------------------------------------
-       * SORT SIDES INTO A DETERMINISTIC ORDER
-       * ------------------------------------------------
-       */
-
-      const sideOrder = [
-        'FRONT',
-        'BACK',
-        'LEFT',
-        'RIGHT',
-        'BOTTOM',
-      ];
-
-      multiViewEntries.sort(
-        ([sideA], [sideB]) => {
-          const indexA =
-            sideOrder.indexOf(sideA);
-
-          const indexB =
-            sideOrder.indexOf(sideB);
-
-          return (
-            (indexA === -1
-              ? 999
-              : indexA) -
-            (indexB === -1
-              ? 999
-              : indexB)
+        if (!capturedImage) {
+          throw new Error(
+            'No package image was captured. Please capture an image first.'
           );
         }
-      );
 
-      /*
-       * ------------------------------------------------
-       * BUILD IMAGE LIST
-       * ------------------------------------------------
-       */
+        console.log(
+          'ANALYSIS: Image found:',
+          capturedImage.name
+        );
 
-      const images =
-        multiViewEntries.length > 0
-          ? multiViewEntries.map(
-              ([, file]) => file
-            )
-          : capturedImage
-          ? [capturedImage]
-          : [];
+        /*
+         * ==================================================
+         * STEP 1 — IMAGE RECEIVED
+         * ==================================================
+         */
 
-      const sides =
-        multiViewEntries.length > 0
-          ? multiViewEntries.map(
-              ([side]) => side
-            )
-          : ['FRONT'];
+        console.log(
+          'ANALYSIS: Step 1 active'
+        );
 
-      /*
-       * ------------------------------------------------
-       * STEP 1 — IMAGES RECEIVED
-       * ------------------------------------------------
-       */
+        updateStep(
+          0,
+          'active'
+        );
 
-      updateStep(0, 'active');
+        await wait(350);
 
-      await new Promise((resolve) =>
-        setTimeout(resolve, 350)
-      );
+        updateStep(
+          0,
+          'complete'
+        );
 
-      if (cancelled) return;
+        console.log(
+          'ANALYSIS: Step 1 complete'
+        );
 
-      updateStep(0, 'complete');
+        /*
+         * ==================================================
+         * STEP 2 — IMAGE QUALITY
+         * ==================================================
+         */
 
-      /*
-       * ------------------------------------------------
-       * STEP 2 — IMAGE QUALITY
-       * ------------------------------------------------
-       *
-       * The backend currently performs the real
-       * processing. This step represents the pipeline
-       * stage before extraction.
-       */
+        console.log(
+          'ANALYSIS: Step 2 active'
+        );
 
-      updateStep(1, 'active');
+        updateStep(
+          1,
+          'active'
+        );
 
-      await new Promise((resolve) =>
-        setTimeout(resolve, 350)
-      );
+        await wait(350);
 
-      if (cancelled) return;
+        updateStep(
+          1,
+          'complete'
+        );
 
-      updateStep(1, 'complete');
+        console.log(
+          'ANALYSIS: Step 2 complete'
+        );
 
-      /*
-       * ------------------------------------------------
-       * CREATE FORMDATA
-       * ------------------------------------------------
-       */
+        /*
+         * ==================================================
+         * CREATE FORM DATA
+         * ==================================================
+         */
 
-      const formData =
-        new FormData();
+        const formData =
+          new FormData();
 
-      /*
-       * Multi-image request.
-       *
-       * Every image is appended under the same
-       * "images" field.
-       *
-       * Flask will later read them using:
-       *
-       * request.files.getlist("images")
-       */
+        /*
+         * ==================================================
+         * SINGLE IMAGE
+         * ==================================================
+         *
+         * The backend supports multi-view inspection
+         * using:
+         *
+         *     images
+         *     image_sides
+         *
+         * This screen currently sends one captured image,
+         * so the image is identified as FRONT.
+         *
+         * The number of image_sides MUST match the
+         * number of images.
+         * ==================================================
+         */
 
-      images.forEach((file) => {
         formData.append(
           'images',
-          file,
-          file.name
-        );
-      });
-
-      /*
-       * Side information is sent in exactly the
-       * same order as the images above.
-       */
-
-      formData.append(
-        'image_sides',
-        JSON.stringify(sides)
-      );
-
-      /*
-       * ------------------------------------------------
-       * CLASSIFICATION
-       * ------------------------------------------------
-       */
-
-      const category =
-        currentInspection?.product
-          ?.category ?? 'Other';
-
-      const origin =
-        currentInspection?.product
-          ?.isImported
-          ? 'imported'
-          : 'domestic';
-
-      const saleType =
-        currentInspection?.product
-          ?.saleType ?? 'retail';
-
-      formData.append(
-        'category',
-        category
-      );
-
-      formData.append(
-        'origin',
-        origin
-      );
-
-      formData.append(
-        'sale_type',
-        saleType
-      );
-
-      /*
-       * ------------------------------------------------
-       * STEP 3 — TEXT EXTRACTION
-       * ------------------------------------------------
-       */
-
-      updateStep(2, 'active');
-
-      /*
-       * Give the UI a short delay so the user can
-       * actually see the processing stage.
-       */
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 450)
-      );
-
-      if (cancelled) return;
-
-      /*
-       * ------------------------------------------------
-       * BACKEND REQUEST
-       * ------------------------------------------------
-       *
-       * IMPORTANT:
-       *
-       * Use the relative /api/scan endpoint.
-       *
-       * Vercel routes /api/* to the deployed backend
-       * service. This works on mobile and does not
-       * point to the phone's own localhost.
-       */
-
-      let response: Response;
-
-      try {
-        response = await fetch(
-          '/api/scan',
-          {
-            method: 'POST',
-            body: formData,
-          }
-        );
-      } catch (networkError) {
-        console.error(
-          'Backend connection error:',
-          networkError
+          capturedImage,
+          capturedImage.name
         );
 
-        throw new Error(
-          'Unable to connect to the Nometra backend. Please check the deployed backend service.'
+        formData.append(
+          'image_sides',
+          JSON.stringify([
+            'FRONT',
+          ])
         );
-      }
 
-      if (!response.ok) {
-        let backendMessage =
-          `Backend returned HTTP ${response.status}.`;
+        console.log(
+          'ANALYSIS: Image side:',
+          'FRONT'
+        );
+
+        /*
+         * ==================================================
+         * PRODUCT CATEGORY
+         * ==================================================
+         */
+
+        formData.append(
+          'category',
+          category
+        );
+
+        console.log(
+          'ANALYSIS: Product category:',
+          category
+        );
+
+        /*
+         * ==================================================
+         * STEP 3 — TEXT EXTRACTION
+         * ==================================================
+         */
+
+        updateStep(
+          2,
+          'active'
+        );
+
+        console.log(
+          'ANALYSIS: Sending image to backend...'
+        );
+
+        console.log(
+          'ANALYSIS: Backend URL:',
+          '/api/scan'
+        );
+
+        /*
+         * ==================================================
+         * SEND TO FLASK BACKEND
+         * ==================================================
+         */
+
+        let response: Response;
 
         try {
-          const errorData =
-            await response.json();
+          response =
+            await fetch(
+              '/api/scan',
+              {
+                method: 'POST',
+                body: formData,
+              }
+            );
+        } catch (networkError) {
+          console.error(
+            'ANALYSIS: Backend connection error:',
+            networkError
+          );
 
-          if (
-            typeof errorData?.error ===
-            'string'
-          ) {
-            backendMessage =
-              errorData.error;
-          }
-        } catch {
-          /*
-           * Keep the default HTTP error message
-           * if the backend response is not JSON.
-           */
+          throw new Error(
+            'Unable to connect to the Nometra backend. Please make sure the backend is available.'
+          );
         }
 
-        throw new Error(
-          backendMessage
+        console.log(
+          'ANALYSIS: Backend HTTP status:',
+          response.status
         );
-      }
 
-      const result =
-        await response.json();
+        /*
+         * ==================================================
+         * HANDLE HTTP ERROR
+         * ==================================================
+         */
 
-      if (cancelled) return;
+        if (!response.ok) {
+          let backendMessage =
+            `Backend returned HTTP ${response.status}.`;
 
-      /*
-       * ------------------------------------------------
-       * STORE REAL BACKEND RESULT
-       * ------------------------------------------------
-       */
+          try {
+            const errorData =
+              await response.json();
 
-      setBackendResult(result);
+            if (
+              typeof errorData?.error ===
+              'string'
+            ) {
+              backendMessage =
+                errorData.error;
+            }
+          } catch {
+            /*
+             * Keep default HTTP message.
+             */
+          }
 
-      /*
-       * ------------------------------------------------
-       * TEXT EXTRACTION COMPLETE
-       * ------------------------------------------------
-       */
-
-      updateStep(2, 'complete');
-
-      /*
-       * ------------------------------------------------
-       * STEP 4 — DECLARATIONS IDENTIFIED
-       * ------------------------------------------------
-       */
-
-      updateStep(3, 'active');
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 350)
-      );
-
-      if (cancelled) return;
-
-      updateStep(3, 'complete');
-
-      /*
-       * ------------------------------------------------
-       * STEP 5 — APPLICABLE REQUIREMENTS
-       * ------------------------------------------------
-       */
-
-      updateStep(4, 'active');
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 350)
-      );
-
-      if (cancelled) return;
-
-      updateStep(4, 'complete');
-
-      /*
-       * ------------------------------------------------
-       * STEP 6 — COMPLIANCE EVALUATION
-       * ------------------------------------------------
-       */
-
-      updateStep(5, 'active');
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 350)
-      );
-
-      if (cancelled) return;
-
-      updateStep(5, 'complete');
-
-      /*
-       * ------------------------------------------------
-       * STEP 7 — EVIDENCE LINKING
-       * ------------------------------------------------
-       */
-
-      updateStep(6, 'active');
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 350)
-      );
-
-      if (cancelled) return;
-
-      /*
-       * Apply the complete backend result to the
-       * current frontend inspection.
-       *
-       * This also maps source_side from multi-view
-       * extraction into SIDE-FRONT / SIDE-BACK etc.
-       */
-
-      applyBackendResultToInspection(
-        result
-      );
-
-      updateStep(6, 'complete');
-
-      /*
-       * ------------------------------------------------
-       * FINISH
-       * ------------------------------------------------
-       */
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 500)
-      );
-
-      if (cancelled) return;
-
-      navigate(
-        'compliance-result'
-      );
-    };
-
-    runAnalysis().catch(
-      (analysisError) => {
-        if (cancelled) {
-          return;
+          throw new Error(
+            backendMessage
+          );
         }
 
+        /*
+         * ==================================================
+         * READ BACKEND RESULT
+         * ==================================================
+         */
+
+        const result =
+          await response.json();
+
+        console.log(
+          'ANALYSIS: Backend result received:',
+          result
+        );
+
+        /*
+         * ==================================================
+         * STEP 3 COMPLETE
+         * ==================================================
+         */
+
+        setBackendResult(
+          result
+        );
+
+        updateStep(
+          2,
+          'complete'
+        );
+
+        console.log(
+          'ANALYSIS: Step 3 complete'
+        );
+
+        /*
+         * ==================================================
+         * STEP 4 — DECLARATIONS IDENTIFIED
+         * ==================================================
+         */
+
+        updateStep(
+          3,
+          'active'
+        );
+
+        await wait(350);
+
+        updateStep(
+          3,
+          'complete'
+        );
+
+        console.log(
+          'ANALYSIS: Declarations identified'
+        );
+
+        /*
+         * ==================================================
+         * STEP 5 — APPLICABLE REQUIREMENTS
+         * ==================================================
+         */
+
+        updateStep(
+          4,
+          'active'
+        );
+
+        await wait(350);
+
+        updateStep(
+          4,
+          'complete'
+        );
+
+        console.log(
+          'ANALYSIS: Applicable requirements determined'
+        );
+
+        /*
+         * ==================================================
+         * STEP 6 — COMPLIANCE EVALUATION
+         * ==================================================
+         */
+
+        updateStep(
+          5,
+          'active'
+        );
+
+        await wait(350);
+
+        updateStep(
+          5,
+          'complete'
+        );
+
+        console.log(
+          'ANALYSIS: Compliance evaluation complete'
+        );
+
+        /*
+         * ==================================================
+         * STEP 7 — EVIDENCE LINKING
+         * ==================================================
+         */
+
+        updateStep(
+          6,
+          'active'
+        );
+
+        await wait(350);
+
+        /*
+         * ==================================================
+         * APPLY BACKEND RESULT
+         * ==================================================
+         */
+
+        console.log(
+          'ANALYSIS: Applying backend result'
+        );
+
+        applyBackendResultToInspection(
+          result
+        );
+
+        console.log(
+          'ANALYSIS: Backend result applied'
+        );
+
+        updateStep(
+          6,
+          'complete'
+        );
+
+        /*
+         * ==================================================
+         * FINISH
+         * ==================================================
+         */
+
+        await wait(500);
+
+        console.log(
+          'ANALYSIS: Navigating to compliance result'
+        );
+
+        navigate(
+          'compliance-result'
+        );
+
+      } catch (analysisError) {
         console.error(
           'Analysis failed:',
           analysisError
         );
 
         const message =
-          analysisError instanceof
-          Error
+          analysisError instanceof Error
             ? analysisError.message
             : 'Analysis failed. Please try again.';
 
@@ -537,7 +517,7 @@ export default function AnalysisScreen() {
           previous.map(
             (step) =>
               step.status ===
-                'active'
+              'active'
                 ? {
                     ...step,
                     status: 'error',
@@ -546,14 +526,13 @@ export default function AnalysisScreen() {
           )
         );
       }
-    );
-
-    return () => {
-      cancelled = true;
     };
+
+    runAnalysis();
+
   }, [
     capturedImage,
-    capturedImages,
+    category,
     navigate,
     setBackendResult,
     applyBackendResultToInspection,
@@ -561,15 +540,17 @@ export default function AnalysisScreen() {
   ]);
 
   /*
-   * --------------------------------------------------
-   * RENDER STATUS ICON
-   * --------------------------------------------------
+   * ==================================================
+   * STATUS ICON
+   * ==================================================
    */
 
   const renderStatusIcon = (
     status: AnalysisStatus
   ) => {
-    if (status === 'active') {
+    if (
+      status === 'active'
+    ) {
       return (
         <Loader2
           size={20}
@@ -578,7 +559,9 @@ export default function AnalysisScreen() {
       );
     }
 
-    if (status === 'complete') {
+    if (
+      status === 'complete'
+    ) {
       return (
         <CheckCircle2
           size={20}
@@ -586,7 +569,9 @@ export default function AnalysisScreen() {
       );
     }
 
-    if (status === 'error') {
+    if (
+      status === 'error'
+    ) {
       return (
         <XCircle
           size={20}
@@ -600,30 +585,22 @@ export default function AnalysisScreen() {
   };
 
   /*
-   * --------------------------------------------------
-   * IMAGE COUNT
-   * --------------------------------------------------
-   */
-
-  const imageCount =
-    Object.values(
-      capturedImages
-    ).filter(
-      (file) =>
-        file instanceof File
-    ).length;
-
-  /*
-   * --------------------------------------------------
+   * ==================================================
    * UI
-   * --------------------------------------------------
+   * ==================================================
    */
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
+
       <div className="flex-1 px-6 pt-12 pb-8">
+
         <div className="max-w-md mx-auto">
+
+          {/* HEADER */}
+
           <div className="mb-8">
+
             <p className="text-sm font-medium text-slate-500 mb-2">
               INSPECTION ANALYSIS
             </p>
@@ -633,27 +610,30 @@ export default function AnalysisScreen() {
             </h1>
 
             <p className="text-sm text-slate-500 mt-2">
-              {imageCount > 0
-                ? `Processing ${imageCount} package image${
-                    imageCount === 1
-                      ? ''
-                      : 's'
-                  }`
-                : 'Processing package image'}
+              Processing package image
             </p>
+
           </div>
 
+          {/* ANALYSIS STEPS */}
+
           <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+
             <div className="space-y-5">
+
               {steps.map(
                 (
                   step,
                   index
                 ) => (
+
                   <div
                     key={`${step.label}-${index}`}
                     className="flex items-center gap-4"
                   >
+
+                    {/* STATUS ICON */}
+
                     <div
                       className={`flex-shrink-0 ${
                         step.status ===
@@ -668,12 +648,17 @@ export default function AnalysisScreen() {
                           : 'text-red-600'
                       }`}
                     >
+
                       {renderStatusIcon(
                         step.status
                       )}
+
                     </div>
 
+                    {/* LABEL */}
+
                     <div className="flex-1">
+
                       <p
                         className={`text-sm ${
                           step.status ===
@@ -690,15 +675,24 @@ export default function AnalysisScreen() {
                       >
                         {step.label}
                       </p>
+
                     </div>
+
                   </div>
+
                 )
               )}
+
             </div>
+
           </div>
 
+          {/* ERROR */}
+
           {error && (
+
             <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+
               <p className="text-sm font-medium text-red-800">
                 Analysis failed
               </p>
@@ -716,22 +710,33 @@ export default function AnalysisScreen() {
                 }
                 className="mt-4 text-sm font-medium text-red-800 underline underline-offset-2"
               >
-                Capture images again
+                Capture image again
               </button>
+
             </div>
+
           )}
 
+          {/* INFORMATION */}
+
           {!error && (
+
             <div className="mt-6 text-center">
+
               <p className="text-xs text-slate-400">
                 Nometra is comparing package
                 declarations against the
                 applicable inspection rules.
               </p>
+
             </div>
+
           )}
+
         </div>
+
       </div>
+
     </div>
   );
 }

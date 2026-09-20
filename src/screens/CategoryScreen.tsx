@@ -3,7 +3,6 @@ import MobileShell from '../components/MobileShell';
 import { useApp } from '../context/AppContext';
 import type {
   ProductCategory,
-  SaleType,
   Inspection,
 } from '../types';
 
@@ -54,28 +53,6 @@ const CATEGORIES: {
   },
 ];
 
-const SALE_TYPES: {
-  id: SaleType;
-  label: string;
-  note: string;
-}[] = [
-  {
-    id: 'retail',
-    label: 'Retail',
-    note: 'Package intended for retail sale',
-  },
-  {
-    id: 'wholesale',
-    label: 'Wholesale',
-    note: 'Package intended for wholesale sale',
-  },
-  {
-    id: 'institutional_or_industrial',
-    label: 'Institutional / Industrial',
-    note: 'Package intended for institutional or industrial consumers',
-  },
-];
-
 export default function CategoryScreen() {
   const {
     navigate,
@@ -85,14 +62,6 @@ export default function CategoryScreen() {
 
   const selectedCategory =
     currentInspection?.product.category ?? 'Other';
-
-  const selectedOrigin =
-    currentInspection?.product.isImported
-      ? 'imported'
-      : 'domestic';
-
-  const selectedSaleType =
-    currentInspection?.product.saleType ?? 'retail';
 
   const updateProduct = (
     updates: Partial<Inspection['product']>
@@ -120,22 +89,6 @@ export default function CategoryScreen() {
     });
   };
 
-  const handleOriginSelect = (
-    origin: 'domestic' | 'imported'
-  ) => {
-    updateProduct({
-      isImported: origin === 'imported',
-    });
-  };
-
-  const handleSaleTypeSelect = (
-    saleType: SaleType
-  ) => {
-    updateProduct({
-      saleType,
-    });
-  };
-
   const handleContinue = () => {
     if (!currentInspection) {
       return;
@@ -154,8 +107,7 @@ export default function CategoryScreen() {
         {/* PRODUCT CATEGORY */}
 
         <p className="text-sm text-slate-500 mb-4">
-          Select the product category and classification
-          details for this inspection.
+          Select the product category for this inspection.
         </p>
 
         <div className="mb-2">
@@ -221,181 +173,19 @@ export default function CategoryScreen() {
           })}
         </div>
 
-        {/* PRODUCT ORIGIN */}
-
-        <div className="mt-6">
-          <p className="text-sm font-display font-semibold text-slate-900">
-            Product Origin
-          </p>
-
-          <p className="text-xs text-slate-500 mt-1 mb-3">
-            Origin determines whether country of origin
-            must be checked.
-          </p>
-
-          <div className="grid grid-cols-2 gap-2">
-
-            {/* DOMESTIC */}
-
-            <button
-              type="button"
-              onClick={() =>
-                handleOriginSelect('domestic')
-              }
-              className={`px-4 py-3 rounded-xl border text-left transition-colors ${
-                selectedOrigin === 'domestic'
-                  ? 'bg-blue-50 border-blue-300'
-                  : 'bg-white border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p
-                    className={`font-display font-semibold text-sm ${
-                      selectedOrigin === 'domestic'
-                        ? 'text-blue-800'
-                        : 'text-slate-900'
-                    }`}
-                  >
-                    Domestic
-                  </p>
-
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Made in India
-                  </p>
-                </div>
-
-                {selectedOrigin === 'domestic' && (
-                  <CheckCircle2
-                    size={18}
-                    className="text-blue-600 shrink-0"
-                  />
-                )}
-              </div>
-            </button>
-
-            {/* IMPORTED */}
-
-            <button
-              type="button"
-              onClick={() =>
-                handleOriginSelect('imported')
-              }
-              className={`px-4 py-3 rounded-xl border text-left transition-colors ${
-                selectedOrigin === 'imported'
-                  ? 'bg-blue-50 border-blue-300'
-                  : 'bg-white border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p
-                    className={`font-display font-semibold text-sm ${
-                      selectedOrigin === 'imported'
-                        ? 'text-blue-800'
-                        : 'text-slate-900'
-                    }`}
-                  >
-                    Imported
-                  </p>
-
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Imported into India
-                  </p>
-                </div>
-
-                {selectedOrigin === 'imported' && (
-                  <CheckCircle2
-                    size={18}
-                    className="text-blue-600 shrink-0"
-                  />
-                )}
-              </div>
-            </button>
-
-          </div>
-        </div>
-
-        {/* SALE TYPE */}
-
-        <div className="mt-6">
-          <p className="text-sm font-display font-semibold text-slate-900">
-            Intended Sale Type
-          </p>
-
-          <p className="text-xs text-slate-500 mt-1 mb-3">
-            Sale type determines which Legal Metrology
-            declarations are applicable.
-          </p>
-
-          <div className="flex flex-col gap-2">
-            {SALE_TYPES.map((saleType) => {
-              const isSelected =
-                selectedSaleType === saleType.id;
-
-              return (
-                <button
-                  key={saleType.id}
-                  type="button"
-                  onClick={() =>
-                    handleSaleTypeSelect(
-                      saleType.id
-                    )
-                  }
-                  className={`flex items-center justify-between px-4 py-3.5 rounded-xl border text-left transition-colors ${
-                    isSelected
-                      ? 'bg-blue-50 border-blue-300'
-                      : 'bg-white border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  <div>
-                    <p
-                      className={`font-display font-semibold text-sm ${
-                        isSelected
-                          ? 'text-blue-800'
-                          : 'text-slate-900'
-                      }`}
-                    >
-                      {saleType.label}
-                    </p>
-
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {saleType.note}
-                    </p>
-                  </div>
-
-                  {isSelected && (
-                    <CheckCircle2
-                      size={18}
-                      className="text-blue-600 shrink-0"
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* CLASSIFICATION SUMMARY */}
+        {/* CLASSIFICATION INFORMATION */}
 
         <div className="mt-5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
           <p className="text-xs text-slate-500">
             <span className="font-semibold text-slate-700">
-              Classification:
+              Category:
             </span>{' '}
-            {selectedOrigin === 'imported'
-              ? 'Imported'
-              : 'Domestic'}{' '}
-            ·{' '}
-            {SALE_TYPES.find(
-              (item) =>
-                item.id === selectedSaleType
-            )?.label}
+            {selectedCategory}
           </p>
 
           <p className="text-xs text-slate-500 mt-1">
-            The selected classification will be used by
-            the backend applicability and rule engine.
+            Origin and applicable requirements will be determined
+            from the package evidence during analysis.
           </p>
         </div>
 

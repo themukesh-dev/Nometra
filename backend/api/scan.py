@@ -316,14 +316,9 @@ def _candidate_is_better(
         and str(existing_value).strip() != ""
     )
 
-    # Critical multi-view rule:
-    # a valid value from a later package side must
-    # replace a null/empty value from an earlier side.
     if candidate_has_value and not existing_has_value:
         return True
 
-    # Prefer independently OCR-verified evidence
-    # when both candidates already contain values.
     if (
         candidate_has_value
         and existing_has_value
@@ -464,7 +459,6 @@ def _merge_multiview_evidence(
                 and str(candidate_value).strip() != ""
             )
 
-            # First observation of the field.
             if field not in merged:
 
                 merged[field] = candidate
@@ -482,9 +476,6 @@ def _merge_multiview_evidence(
                 and str(existing_value).strip() != ""
             )
 
-            # Only compare actual evidence values.
-            # Null/empty candidates are ignored and
-            # therefore cannot create false conflicts.
             if (
                 candidate_has_value
                 and existing_has_value
@@ -500,18 +491,11 @@ def _merge_multiview_evidence(
                     candidate,
                 )
 
-            # Replace an empty primary value with a
-            # valid value from this package side, or
-            # prefer OCR-verified evidence when both
-            # values are present.
             if _candidate_is_better(
                 candidate,
                 existing,
             ):
 
-                # If the existing value was itself a
-                # real value and differs, retain it as
-                # a conflict when the candidate replaces it.
                 if (
                     existing_has_value
                     and candidate_has_value
@@ -541,17 +525,6 @@ def _build_combined_evidence_hash(
     """
     Builds a deterministic SHA-256 fingerprint
     for the complete multi-view evidence set.
-
-    The side name and individual image hash are
-    included so that:
-
-        FRONT + hash
-        BACK + hash
-        LEFT + hash
-        RIGHT + hash
-
-    represent one deterministic inspection
-    evidence fingerprint.
     """
 
     evidence_parts = []
@@ -584,33 +557,6 @@ def _build_combined_evidence_hash(
 def scan_label():
     """
     Accepts one or multiple package images.
-
-    Multi-image request:
-
-        images      -> package images
-        image_sides -> JSON array containing
-                       corresponding package sides
-
-    Example:
-
-        images:
-            front.jpg
-            back.jpg
-            left.jpg
-            right.jpg
-
-        image_sides:
-            ["FRONT", "BACK", "LEFT", "RIGHT"]
-
-    Also supports the legacy single-image field:
-
-        image -> package image
-
-    Classification:
-
-        category
-        origin
-        sale_type
 
     Full Nometra pipeline:
 
@@ -897,10 +843,7 @@ def scan_label():
                 "path"
             ]
 
-            print(
-                ""
-            )
-
+            print("")
             print(
                 "======================================"
             )
@@ -927,6 +870,18 @@ def scan_label():
                 extract_label_data(
                     temp_path
                 )
+            )
+
+            print(
+                "GEMINI COUNTRY OF ORIGIN:",
+                gemini_result.get(
+                    "country_of_origin"
+                )
+                if isinstance(
+                    gemini_result,
+                    dict,
+                )
+                else None,
             )
 
             # --------------------------------------------------
@@ -958,6 +913,17 @@ def scan_label():
                     gemini_result,
                     ocr_result,
                 )
+            )
+
+            print(
+                "FUSED COUNTRY OF ORIGIN:",
+                json.dumps(
+                    fused_side_evidence.get(
+                        "country_of_origin"
+                    ),
+                    indent=2,
+                    ensure_ascii=False,
+                ),
             )
 
             print(
@@ -1020,10 +986,7 @@ def scan_label():
             per_side_evidence
         )
 
-        print(
-            ""
-        )
-
+        print("")
         print(
             "MULTI-VIEW EVIDENCE MERGE COMPLETE"
         )
@@ -1039,6 +1002,17 @@ def scan_label():
             "  fields:",
             len(
                 fused_evidence
+            ),
+        )
+
+        print(
+            "MERGED COUNTRY OF ORIGIN:",
+            json.dumps(
+                fused_evidence.get(
+                    "country_of_origin"
+                ),
+                indent=2,
+                ensure_ascii=False,
             ),
         )
 
@@ -1062,14 +1036,6 @@ def scan_label():
 
         # --------------------------------------------------
         # 9. Attach multi-view metadata
-        # --------------------------------------------------
-        #
-        # Stored inside extracted_data so the
-        # historical inspection retains the fact
-        # that multiple package views were used.
-        #
-        # The evaluator ignores this metadata because
-        # it evaluates only registered rule fields.
         # --------------------------------------------------
 
         fused_evidence[
@@ -1099,10 +1065,31 @@ def scan_label():
 
         # --------------------------------------------------
         # 10. Rule engine
-        #
-        # Classification is passed to the evaluator
-        # so applicability conditions can be evaluated.
         # --------------------------------------------------
+
+        print("")
+        print("========== COO DEBUG ==========")
+
+        print("CLASSIFICATION:")
+        print(
+            json.dumps(
+                classification,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        print("")
+        print("FUSED COUNTRY OF ORIGIN:")
+        print(
+            json.dumps(
+                fused_evidence.get(
+                    "country_of_origin"
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
 
         compliance_report = (
             evaluate_rules(
@@ -1111,13 +1098,35 @@ def scan_label():
             )
         )
 
+        print("")
+        print("COO RULE RESULT:")
+        print(
+            json.dumps(
+                [
+                    result
+                    for result in compliance_report.get(
+                        "results",
+                        []
+                    )
+                    if (
+                        result.get("rule_id")
+                        == "LM-COO-01"
+                        or
+                        result.get("field")
+                        == "country_of_origin"
+                    )
+                ],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        print("================================")
+        print("")
+
         # --------------------------------------------------
         # 11. Save real inspection
         # --------------------------------------------------
-
-        print(
-            ""
-        )
 
         print(
             "ABOUT TO SAVE INSPECTION:"
@@ -1266,29 +1275,7 @@ def save_inspector_review(
     """
     Persists the inspector's review for an
     existing inspection.
-
-    Expected JSON body:
-
-    {
-        "inspector_decisions": {
-            "finding-id": "CONFIRM"
-        },
-
-        "inspector_notes": {
-            "finding-id": "Inspector note"
-        },
-
-        "inspector_remarks":
-            "Overall remarks",
-
-        "final_status":
-            "COMPLIANT"
-    }
     """
-
-    # --------------------------------------------------
-    # 1. Verify inspection exists
-    # --------------------------------------------------
 
     inspection = (
         get_inspection_by_id(
@@ -1305,10 +1292,6 @@ def save_inspector_review(
             )
         }), 404
 
-    # --------------------------------------------------
-    # 2. Validate request body
-    # --------------------------------------------------
-
     data = request.get_json(
         silent=True
     )
@@ -1321,10 +1304,6 @@ def save_inspector_review(
                 "valid JSON."
             )
         }), 400
-
-    # --------------------------------------------------
-    # 3. Read inspector review data
-    # --------------------------------------------------
 
     inspector_decisions = data.get(
         "inspector_decisions",
@@ -1344,10 +1323,6 @@ def save_inspector_review(
     final_status = data.get(
         "final_status"
     )
-
-    # --------------------------------------------------
-    # 4. Basic type validation
-    # --------------------------------------------------
 
     if not isinstance(
         inspector_decisions,
@@ -1400,10 +1375,6 @@ def save_inspector_review(
             )
         }), 400
 
-    # --------------------------------------------------
-    # 5. Persist inspector review
-    # --------------------------------------------------
-
     updated = (
         update_inspector_review(
             inspection_id=
@@ -1432,10 +1403,6 @@ def save_inspector_review(
             )
         }), 500
 
-    # --------------------------------------------------
-    # 6. Return updated inspection
-    # --------------------------------------------------
-
     updated_inspection = (
         get_inspection_by_id(
             inspection_id
@@ -1463,11 +1430,6 @@ def list_inspections():
     """
     Returns a summary list of every past scan
     (most recent first).
-
-    Does NOT include the full extracted_data /
-    compliance_report.
-
-    Use GET /inspections/<id> for full detail.
     """
 
     inspections = (
@@ -1488,10 +1450,7 @@ def get_inspection(
     inspection_id,
 ):
     """
-    Returns full detail for one past scan,
-    including extracted_data,
-    compliance_report,
-    and inspector review information.
+    Returns full detail for one past scan.
     """
 
     inspection = (

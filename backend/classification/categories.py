@@ -1,44 +1,49 @@
-# backend/classification/categories.py
-
 """
 Defines the classification taxonomy used across the pipeline.
 
 Per project scope: this system handles ONE overarching commodity type —
 general pre-packaged commodities under the Legal Metrology (Packaged
-Commodities) Rules, 2011. There is no multi-industry categorization
-(no separate "food" vs "cosmetics" rule sets).
+Commodities) Rules, 2011.
 
-Instead, "classification" here means the two dimensions that actually
-change which declarations are legally required for a given package:
+The inspector does not manually select origin or sale type.
 
-1. ORIGIN — domestic vs imported affects whether "country_of_origin"
-   is mandatory. This is exactly why LM-COO-01 in
-   rules/packaged_commodities/mandatory_declarations.py is marked
-   required=False: it's conditional on origin, and that condition is
-   resolved using the values defined here.
+Instead:
 
-2. SALE_TYPE — retail vs wholesale/institutional affects whether the
-   Legal Metrology (Packaged Commodities) Rules apply AT ALL. Rule 3
-   of the 2011 Rules exempts packages meant for industrial or
-   institutional consumers, and wholesale packages not intended for
-   retail sale, from most Chapter II declarations.
+1. PRODUCT CATEGORY is selected by the inspector as descriptive
+   information.
 
-These constants are meant to be consumed by (not yet implemented):
-- classification/category_validator.py — validates a classification dict
-- applicability/classifier.py — decides which rules apply
-- applicability/exceptions.py — implements the Rule 3 exemptions
+2. ORIGIN is resolved from package evidence when possible.
+
+3. SALE_TYPE remains an internal default of retail for the current
+   prototype because the inspector is not asked to manually classify
+   retail/wholesale/institutional intent.
+
+This keeps the existing applicability architecture compatible while
+removing manual legal classification from the UI.
 """
 
-# --- Origin dimension ---
+# --------------------------------------------------
+# Origin dimension
+# --------------------------------------------------
+
 ORIGIN_DOMESTIC = "domestic"
 ORIGIN_IMPORTED = "imported"
 
-VALID_ORIGINS = [ORIGIN_DOMESTIC, ORIGIN_IMPORTED]
+VALID_ORIGINS = [
+    ORIGIN_DOMESTIC,
+    ORIGIN_IMPORTED,
+]
 
-# --- Sale-type dimension ---
+
+# --------------------------------------------------
+# Sale-type dimension
+# --------------------------------------------------
+
 SALE_TYPE_RETAIL = "retail"
 SALE_TYPE_WHOLESALE = "wholesale"
-SALE_TYPE_INSTITUTIONAL_OR_INDUSTRIAL = "institutional_or_industrial"
+SALE_TYPE_INSTITUTIONAL_OR_INDUSTRIAL = (
+    "institutional_or_industrial"
+)
 
 VALID_SALE_TYPES = [
     SALE_TYPE_RETAIL,
@@ -46,42 +51,235 @@ VALID_SALE_TYPES = [
     SALE_TYPE_INSTITUTIONAL_OR_INDUSTRIAL,
 ]
 
-# The single commodity type this whole system is scoped to.
+
+# --------------------------------------------------
+# Commodity type
+# --------------------------------------------------
+
 COMMODITY_TYPE = "packaged_commodity"
 
-# Sensible defaults when classification signals aren't available/detected.
-# Most scans are of retail packages photographed by a consumer/inspector,
-# and most retail packages sold in India are domestically produced, so
-# these are the safest fallback assumptions rather than guesses.
+
+# --------------------------------------------------
+# Internal defaults
+# --------------------------------------------------
+
 DEFAULT_ORIGIN = ORIGIN_DOMESTIC
+
 DEFAULT_SALE_TYPE = SALE_TYPE_RETAIL
 
 
-def is_valid_origin(origin: str) -> bool:
-    """Checks whether a given origin value is one of the recognized values."""
+# --------------------------------------------------
+# Validation helpers
+# --------------------------------------------------
+
+def is_valid_origin(
+    origin: str,
+) -> bool:
+    """Checks whether an origin value is recognized."""
     return origin in VALID_ORIGINS
 
 
-def is_valid_sale_type(sale_type: str) -> bool:
-    """Checks whether a given sale-type value is one of the recognized values."""
+def is_valid_sale_type(
+    sale_type: str,
+) -> bool:
+    """Checks whether a sale type is recognized."""
     return sale_type in VALID_SALE_TYPES
 
 
-def build_classification(origin: str = DEFAULT_ORIGIN, sale_type: str = DEFAULT_SALE_TYPE) -> dict:
-    """
-    Builds the standard classification dict that downstream modules
-    (category_validator.py, applicability/classifier.py) will consume.
+# --------------------------------------------------
+# Evidence helpers
+# --------------------------------------------------
 
-    Falls back to defaults for any unrecognized value rather than raising,
-    since classification signals extracted from a label photo can be
-    noisy or absent. Correctness/consistency checking of a classification
-    dict happens separately, in category_validator.py.
+def _extract_evidence_value(
+    fused_evidence: dict | None,
+    field_name: str,
+) -> str | None:
     """
-    resolved_origin = origin if is_valid_origin(origin) else DEFAULT_ORIGIN
-    resolved_sale_type = sale_type if is_valid_sale_type(sale_type) else DEFAULT_SALE_TYPE
+    Safely extracts a normalized evidence value.
+
+    Evidence is expected to have the form:
+
+        {
+            "country_of_origin": {
+                "value": "...",
+                ...
+            }
+        }
+    """
+
+    if not isinstance(
+        fused_evidence,
+        dict,
+    ):
+        return None
+
+    field_data = fused_evidence.get(
+        field_name,
+        {},
+    )
+
+    if not isinstance(
+        field_data,
+        dict,
+    ):
+        return None
+
+    value = field_data.get(
+        "value"
+    )
+
+    if value is None:
+        return None
+
+    if not isinstance(
+        value,
+        str,
+    ):
+        value = str(value)
+
+    value = value.strip()
+
+    return value or None
+
+
+def resolve_origin_from_evidence(
+    fused_evidence: dict | None,
+) -> str:
+    """
+    Resolves origin from package evidence.
+
+    Current prototype logic:
+
+    - Explicit foreign country-of-origin evidence → imported.
+    - Explicit India country-of-origin evidence → domestic.
+    - No usable country-of-origin evidence → domestic fallback.
+
+    This is an evidence-based prototype classification signal, not a
+    complete legal determination of import status.
+    """
+
+    country_of_origin = _extract_evidence_value(
+        fused_evidence,
+        "country_of_origin",
+    )
+
+    if not country_of_origin:
+        return DEFAULT_ORIGIN
+
+    normalized = country_of_origin.strip().lower()
+
+    india_values = {
+        "india",
+        "ind",
+        "bharat",
+        "made in india",
+        "manufactured in india",
+    }
+
+    for value in india_values:
+        if value in normalized:
+            return ORIGIN_DOMESTIC
+
+    return ORIGIN_IMPORTED
+
+
+# --------------------------------------------------
+# Classification builder
+# --------------------------------------------------
+
+def build_classification(
+    origin: str = DEFAULT_ORIGIN,
+    sale_type: str = DEFAULT_SALE_TYPE,
+) -> dict:
+    """
+    Builds the standard classification dict.
+
+    Origin and sale type remain part of the backend schema for
+    compatibility with the existing applicability/rule engine.
+
+    The frontend no longer supplies these values manually.
+    """
+
+    resolved_origin = (
+        origin
+        if is_valid_origin(origin)
+        else DEFAULT_ORIGIN
+    )
+
+    resolved_sale_type = (
+        sale_type
+        if is_valid_sale_type(sale_type)
+        else DEFAULT_SALE_TYPE
+    )
 
     return {
         "commodity_type": COMMODITY_TYPE,
         "origin": resolved_origin,
         "sale_type": resolved_sale_type,
     }
+
+
+def build_classification_from_evidence(
+    fused_evidence: dict | None = None,
+    sale_type: str = DEFAULT_SALE_TYPE,
+) -> dict:
+    """
+    Builds classification using package evidence.
+
+    The inspector does not manually select origin.
+
+    Sale type remains an internal retail default for the current
+    prototype because the current package image pipeline does not
+    establish retail/wholesale/institutional intent from evidence.
+    """
+
+    origin = resolve_origin_from_evidence(
+        fused_evidence
+    )
+
+    return build_classification(
+        origin=origin,
+        sale_type=sale_type,
+    )
+
+
+# --------------------------------------------------
+# Standalone test runner
+# --------------------------------------------------
+
+if __name__ == "__main__":
+
+    india_evidence = {
+        "country_of_origin": {
+            "value": "India",
+        }
+    }
+
+    foreign_evidence = {
+        "country_of_origin": {
+            "value": "China",
+        }
+    }
+
+    no_country_evidence = {}
+
+    print(
+        "India:",
+        build_classification_from_evidence(
+            india_evidence
+        ),
+    )
+
+    print(
+        "China:",
+        build_classification_from_evidence(
+            foreign_evidence
+        ),
+    )
+
+    print(
+        "No COO:",
+        build_classification_from_evidence(
+            no_country_evidence
+        ),
+    )

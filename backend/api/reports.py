@@ -2,7 +2,12 @@ import os
 import html
 import re
 
-from api.scan import app
+import __main__
+
+if hasattr(__main__, "app"):
+    app = __main__.app
+else:
+    from api.scan import app
 
 from database.inspections import get_inspection_by_id
 
@@ -102,10 +107,6 @@ def _display_status(
     When an inspector has reviewed a finding, the final
     reviewed status is shown together with the inspector
     decision so the automated assessment remains auditable.
-
-    The system assessment is not replaced in the stored
-    inspection record; only the displayed final status is
-    changed according to the inspector decision.
     """
 
     if not decision:
@@ -133,31 +134,7 @@ def _resolve_review_key(
     """
     Resolves an inspector decision to a compliance result.
 
-    The frontend currently stores inspector decisions using
-    finding IDs such as:
-
-        FND-BE-001
-        FND-BE-005
-
-    while the compliance engine uses rule IDs such as:
-
-        LM-MRP-01
-        LM-COO-01
-
-    First try the rule ID directly.
-
-    Then support the current backend finding-ID convention,
-    where the numeric portion of FND-BE-XXX corresponds to
-    the one-based position of the compliance result.
-
-    Example:
-
-        result index 0 -> FND-BE-001
-        result index 4 -> FND-BE-005
-
-    This keeps the report compatible with the existing
-    InspectorReviewScreen without changing the frontend
-    review workflow.
+    Supports both rule IDs and FND-BE finding IDs.
     """
 
     rule_id = result.get(
@@ -177,8 +154,6 @@ def _resolve_review_key(
     if finding_id in inspector_decisions:
         return finding_id
 
-    # Defensive fallback: if the decision object contains
-    # an FND-BE key whose numeric suffix matches this result.
     for key in inspector_decisions:
         if not isinstance(key, str):
             continue
@@ -236,11 +211,6 @@ def download_report_pdf(inspection_id):
 
     The PDF uses the persisted inspector review when
     determining the final displayed status of each rule.
-
-    The original automated assessment remains available
-    through the stored inspection record and is shown
-    implicitly through the final-status / inspector-decision
-    trace in the rule table.
     """
 
     inspection = get_inspection_by_id(

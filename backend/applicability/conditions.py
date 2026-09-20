@@ -1,10 +1,8 @@
-# backend/applicability/conditions.py
-
 """
-Reusable boolean predicates over a classification dict.
+Reusable boolean predicates over a classification dict and, where
+required, package evidence.
 
-A classification dict is expected to match the shape produced by
-classification.categories.build_classification():
+The classification dict retains the existing shape:
 
     {
         "commodity_type": "packaged_commodity",
@@ -12,17 +10,21 @@ classification.categories.build_classification():
         "sale_type": "retail" | "wholesale" | "institutional_or_industrial"
     }
 
-This module does NOT decide which rules apply or which exemptions kick
-in — that's applicability/classifier.py and applicability/exceptions.py's
-job (not yet implemented). It only exposes small, named yes/no checks so
-those modules (and the engine) don't each re-implement the same
-comparisons against classification.categories constants.
+The inspector does NOT manually select origin or sale type.
 
-Every function here assumes it receives an already-valid classification
-dict (i.e. one that passed classification.category_validator.validate_classification()).
-Callers are responsible for validating first; these predicates don't
-re-check structure and will raise a KeyError on a malformed dict rather
-than silently guessing.
+Country-of-origin applicability is therefore evidence-aware:
+
+    - If the package contains a detected country-of-origin value,
+      the declaration is evaluated.
+    - If the package is classified as imported but no country-of-origin
+      value was detected, the declaration is still required and can fail.
+    - If the package is domestic and no country-of-origin evidence is
+      present, the current prototype does not treat COO as a required
+      declaration.
+
+This preserves the existing imported-package logic while allowing
+detected evidence such as "MADE IN INDIA" to be evaluated instead of
+being hidden behind a manually selected "Domestic" classification.
 """
 
 from classification.categories import (
@@ -34,68 +36,220 @@ from classification.categories import (
 )
 
 
-def is_imported(classification: dict) -> bool:
-    """True if the package's origin is imported (not domestic)."""
-    return classification["origin"] == ORIGIN_IMPORTED
+# --------------------------------------------------
+# Origin predicates
+# --------------------------------------------------
+
+def is_imported(
+    classification: dict,
+) -> bool:
+    """True if the package classification is imported."""
+    return (
+        classification["origin"]
+        == ORIGIN_IMPORTED
+    )
 
 
-def is_domestic(classification: dict) -> bool:
-    """True if the package's origin is domestic (not imported)."""
-    return classification["origin"] == ORIGIN_DOMESTIC
+def is_domestic(
+    classification: dict,
+) -> bool:
+    """True if the package classification is domestic."""
+    return (
+        classification["origin"]
+        == ORIGIN_DOMESTIC
+    )
 
 
-def is_retail_sale(classification: dict) -> bool:
-    """True if the package is intended for retail sale to a consumer."""
-    return classification["sale_type"] == SALE_TYPE_RETAIL
+# --------------------------------------------------
+# Sale-type predicates
+# --------------------------------------------------
+
+def is_retail_sale(
+    classification: dict,
+) -> bool:
+    """True if the package is treated as retail sale."""
+    return (
+        classification["sale_type"]
+        == SALE_TYPE_RETAIL
+    )
 
 
-def is_wholesale_sale(classification: dict) -> bool:
-    """True if the package is a wholesale package, not intended for retail sale."""
-    return classification["sale_type"] == SALE_TYPE_WHOLESALE
+def is_wholesale_sale(
+    classification: dict,
+) -> bool:
+    """True if the package is treated as wholesale."""
+    return (
+        classification["sale_type"]
+        == SALE_TYPE_WHOLESALE
+    )
 
 
-def is_institutional_or_industrial_sale(classification: dict) -> bool:
-    """True if the package is meant for an institutional/industrial consumer."""
-    return classification["sale_type"] == SALE_TYPE_INSTITUTIONAL_OR_INDUSTRIAL
+def is_institutional_or_industrial_sale(
+    classification: dict,
+) -> bool:
+    """True if the package is institutional/industrial."""
+    return (
+        classification["sale_type"]
+        == SALE_TYPE_INSTITUTIONAL_OR_INDUSTRIAL
+    )
 
 
-def is_non_retail_sale(classification: dict) -> bool:
+def is_non_retail_sale(
+    classification: dict,
+) -> bool:
     """
-    True if the package is NOT a retail package — i.e. wholesale or
-    institutional/industrial. Rule 3 of the 2011 Rules exempts these
-    from most Chapter II declarations; applicability/exceptions.py will
-    use this to decide when that exemption applies.
+    True if the package is NOT treated as retail.
+
+    Rule 3 exemptions currently use this predicate.
     """
-    return is_wholesale_sale(classification) or is_institutional_or_industrial_sale(classification)
+
+    return (
+        is_wholesale_sale(classification)
+        or
+        is_institutional_or_industrial_sale(
+            classification
+        )
+    )
 
 
-def requires_country_of_origin(classification: dict) -> bool:
+# --------------------------------------------------
+# Evidence helper
+# --------------------------------------------------
+
+def has_country_of_origin_evidence(
+    fused_evidence: dict | None,
+) -> bool:
     """
-    True if country_of_origin should be treated as mandatory for this
-    package. This is exactly the condition LM-COO-01 in
-    mandatory_declarations.py defers to the engine: the rule itself is
-    required=False, and becomes effectively required only when the
-    package is imported.
+    Returns True when usable country-of-origin evidence exists.
+
+    Evidence is expected to contain:
+
+        fused_evidence["country_of_origin"]["value"]
     """
-    return is_imported(classification)
+
+    if not isinstance(
+        fused_evidence,
+        dict,
+    ):
+        return False
+
+    field_data = fused_evidence.get(
+        "country_of_origin",
+        {},
+    )
+
+    if not isinstance(
+        field_data,
+        dict,
+    ):
+        return False
+
+    value = field_data.get(
+        "value"
+    )
+
+    if value is None:
+        return False
+
+    if not isinstance(
+        value,
+        str,
+    ):
+        value = str(value)
+
+    return bool(
+        value.strip()
+    )
 
 
-# Standalone test runner — same pattern as other modules in this project
+# --------------------------------------------------
+# Country-of-origin requirement
+# --------------------------------------------------
+
+def requires_country_of_origin(
+    classification: dict,
+    fused_evidence: dict | None = None,
+) -> bool:
+    """
+    Determines whether Country of Origin should be evaluated.
+
+    Current prototype behavior:
+
+    1. Imported classification:
+       COO is required even when evidence is missing.
+
+    2. Any detected COO evidence:
+       COO is evaluated, including "India".
+
+    3. Domestic classification with no COO evidence:
+       COO is not required.
+
+    This prevents a detected value such as "India" from being
+    incorrectly displayed as NOT_APPLICABLE solely because the
+    inspector did not select "Imported".
+    """
+
+    if is_imported(
+        classification
+    ):
+        return True
+
+    if has_country_of_origin_evidence(
+        fused_evidence
+    ):
+        return True
+
+    return False
+
+
+# --------------------------------------------------
+# Standalone test runner
+# --------------------------------------------------
+
 if __name__ == "__main__":
-    from classification.categories import build_classification
 
-    domestic_retail = build_classification(origin="domestic", sale_type="retail")
-    imported_retail = build_classification(origin="imported", sale_type="retail")
-    domestic_wholesale = build_classification(origin="domestic", sale_type="wholesale")
+    from classification.categories import (
+        build_classification,
+    )
 
-    for label, classification in [
-        ("domestic_retail", domestic_retail),
-        ("imported_retail", imported_retail),
-        ("domestic_wholesale", domestic_wholesale),
-    ]:
-        print(label, {
-            "is_imported": is_imported(classification),
-            "is_retail_sale": is_retail_sale(classification),
-            "is_non_retail_sale": is_non_retail_sale(classification),
-            "requires_country_of_origin": requires_country_of_origin(classification),
-        })
+    domestic_retail = build_classification(
+        origin="domestic",
+        sale_type="retail",
+    )
+
+    imported_retail = build_classification(
+        origin="imported",
+        sale_type="retail",
+    )
+
+    india_evidence = {
+        "country_of_origin": {
+            "value": "India",
+        }
+    }
+
+    no_evidence = {}
+
+    print(
+        "Domestic + India evidence:",
+        requires_country_of_origin(
+            domestic_retail,
+            india_evidence,
+        ),
+    )
+
+    print(
+        "Domestic + no evidence:",
+        requires_country_of_origin(
+            domestic_retail,
+            no_evidence,
+        ),
+    )
+
+    print(
+        "Imported + no evidence:",
+        requires_country_of_origin(
+            imported_retail,
+            no_evidence,
+        ),
+    )

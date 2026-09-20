@@ -9,12 +9,17 @@ import {
 import type {
   Screen,
   Inspection,
-  PackageSide,
   Evidence,
   Finding,
   Requirement,
   ComplianceStatus,
 } from '../types';
+
+/*
+ * ==================================================
+ * BACKEND SCAN RESULT
+ * ==================================================
+ */
 
 export interface BackendScanResult {
   inspection_id: number;
@@ -23,14 +28,28 @@ export interface BackendScanResult {
 
   compliance_report: {
     overall_status: string;
+
     total_rules_checked: number;
+
     passed: number;
+
     failed: number;
+
+    classification?: {
+      commodity_type?: string;
+
+      origin?: string;
+
+      sale_type?: string;
+    };
 
     results: Array<{
       rule_id: string;
+
       description: string;
+
       legal_reference: string;
+
       field: string;
 
       status:
@@ -48,9 +67,9 @@ export interface BackendScanResult {
 }
 
 /*
- * --------------------------------------------------
+ * ==================================================
  * HISTORICAL BACKEND INSPECTION
- * --------------------------------------------------
+ * ==================================================
  */
 
 export interface BackendHistoricalInspection {
@@ -120,8 +139,6 @@ export interface BackendHistoricalInspection {
         source: string;
 
         verified_by_ocr: boolean;
-
-        source_side?: string | null;
       };
 
       trace?: {
@@ -161,6 +178,12 @@ export interface BackendHistoricalInspection {
   };
 }
 
+/*
+ * ==================================================
+ * CONTEXT TYPE
+ * ==================================================
+ */
+
 interface AppContextValue {
   screen: Screen;
 
@@ -180,41 +203,10 @@ interface AppContextValue {
 
   startNewInspection: () => void;
 
-  capturedSides: PackageSide[];
-
-  setCapturedSides: (
-    sides: PackageSide[]
-  ) => void;
-
   /*
-   * --------------------------------------------------
-   * MULTI-IMAGE CAPTURE
-   * --------------------------------------------------
-   *
-   * Stores the actual image File for every captured
-   * package side.
-   */
-
-  capturedImages: Partial<
-    Record<PackageSide, File>
-  >;
-
-  setCapturedImages: (
-    images: Partial<
-      Record<PackageSide, File>
-    >
-  ) => void;
-
-  setCapturedImageForSide: (
-    side: PackageSide,
-    file: File | null
-  ) => void;
-
-  /*
-   * Legacy single-image state.
-   *
-   * Kept for compatibility with existing screens.
-   * It represents the most recently captured image.
+   * -----------------------------------------------
+   * SINGLE IMAGE
+   * -----------------------------------------------
    */
 
   capturedImage: File | null;
@@ -222,6 +214,12 @@ interface AppContextValue {
   setCapturedImage: (
     file: File | null
   ) => void;
+
+  /*
+   * -----------------------------------------------
+   * BACKEND
+   * -----------------------------------------------
+   */
 
   backendResult: BackendScanResult | null;
 
@@ -234,9 +232,9 @@ interface AppContextValue {
   ) => void;
 
   /*
-   * --------------------------------------------------
-   * HISTORICAL INSPECTION STATE
-   * --------------------------------------------------
+   * -----------------------------------------------
+   * HISTORICAL INSPECTION
+   * -----------------------------------------------
    */
 
   historicalInspectionId: number | null;
@@ -254,17 +252,35 @@ interface AppContextValue {
       | null
   ) => void;
 
+  /*
+   * -----------------------------------------------
+   * ANALYSIS
+   * -----------------------------------------------
+   */
+
   analysisStep: number;
 
   setAnalysisStep: (
     step: number
   ) => void;
 
+  /*
+   * -----------------------------------------------
+   * FINDING SELECTION
+   * -----------------------------------------------
+   */
+
   selectedFindingId: string | null;
 
   setSelectedFindingId: (
     id: string | null
   ) => void;
+
+  /*
+   * -----------------------------------------------
+   * INSPECTOR NOTES
+   * -----------------------------------------------
+   */
 
   inspectorNotes: Record<string, string>;
 
@@ -273,9 +289,18 @@ interface AppContextValue {
     note: string
   ) => void;
 
+  /*
+   * -----------------------------------------------
+   * INSPECTOR DECISIONS
+   * -----------------------------------------------
+   */
+
   inspectorDecisions: Record<
     string,
-    'CONFIRM' | 'REJECT' | 'MODIFY' | 'REQUEST_EVIDENCE'
+    'CONFIRM'
+    | 'REJECT'
+    | 'MODIFY'
+    | 'REQUEST_EVIDENCE'
   >;
 
   setInspectorDecision: (
@@ -287,6 +312,12 @@ interface AppContextValue {
       | 'REQUEST_EVIDENCE'
   ) => void;
 
+  /*
+   * -----------------------------------------------
+   * REMARKS
+   * -----------------------------------------------
+   */
+
   remarksText: string;
 
   setRemarksText: (
@@ -294,8 +325,20 @@ interface AppContextValue {
   ) => void;
 }
 
+/*
+ * ==================================================
+ * CREATE CONTEXT
+ * ==================================================
+ */
+
 const AppContext =
   createContext<AppContextValue | null>(null);
+
+/*
+ * ==================================================
+ * LOCAL INSPECTION ID GENERATOR
+ * ==================================================
+ */
 
 let inspectionCounter = 148;
 
@@ -304,9 +347,9 @@ function generateId(): string {
 }
 
 /*
- * --------------------------------------------------
- * RECALCULATE ACTIVE INSPECTION STATUS
- * --------------------------------------------------
+ * ==================================================
+ * CALCULATE OVERALL STATUS
+ * ==================================================
  */
 
 function calculateOverallStatus(
@@ -334,158 +377,198 @@ function calculateOverallStatus(
   return 'COMPLIANT';
 }
 
+/*
+ * ==================================================
+ * APP PROVIDER
+ * ==================================================
+ */
+
 export function AppProvider({
   children,
 }: {
   children: ReactNode;
 }) {
+  /*
+   * -----------------------------------------------
+   * NAVIGATION
+   * -----------------------------------------------
+   */
+
   const [screen, setScreen] =
     useState<Screen>('login');
+
+  /*
+   * -----------------------------------------------
+   * LOGIN
+   * -----------------------------------------------
+   */
 
   const [isLoggedIn, setIsLoggedIn] =
     useState(false);
 
-  const [currentInspection, setCurrentInspection] =
+  /*
+   * -----------------------------------------------
+   * CURRENT INSPECTION
+   * -----------------------------------------------
+   */
+
+  const [
+    currentInspection,
+    setCurrentInspection,
+  ] =
     useState<Inspection | null>(null);
 
-  const [capturedSides, setCapturedSides] =
-    useState<PackageSide[]>([]);
-
   /*
-   * --------------------------------------------------
-   * MULTI-IMAGE STATE
-   * --------------------------------------------------
+   * -----------------------------------------------
+   * SINGLE CAPTURED IMAGE
+   * -----------------------------------------------
    */
 
-  const [capturedImages, setCapturedImages] =
-    useState<
-      Partial<Record<PackageSide, File>>
-    >({});
-
-  /*
-   * Legacy latest-image state.
-   */
-
-  const [capturedImage, setCapturedImage] =
+  const [
+    capturedImage,
+    setCapturedImage,
+  ] =
     useState<File | null>(null);
 
-  const [backendResult, setBackendResult] =
-    useState<BackendScanResult | null>(null);
+  /*
+   * -----------------------------------------------
+   * BACKEND RESULT
+   * -----------------------------------------------
+   */
+
+  const [
+    backendResult,
+    setBackendResult,
+  ] =
+    useState<BackendScanResult | null>(
+      null
+    );
 
   /*
-   * --------------------------------------------------
-   * HISTORICAL INSPECTION STATE
-   * --------------------------------------------------
+   * -----------------------------------------------
+   * HISTORICAL INSPECTION
+   * -----------------------------------------------
    */
 
   const [
     historicalInspectionId,
     setHistoricalInspectionId,
-  ] = useState<number | null>(null);
+  ] =
+    useState<number | null>(null);
 
   const [
     historicalInspection,
     setHistoricalInspection,
   ] =
-    useState<BackendHistoricalInspection | null>(
-      null
-    );
+    useState<
+      BackendHistoricalInspection | null
+    >(null);
 
-  const [analysisStep, setAnalysisStep] =
-    useState(0);
+  /*
+   * -----------------------------------------------
+   * ANALYSIS
+   * -----------------------------------------------
+   */
 
-  const [selectedFindingId, setSelectedFindingId] =
+  const [
+    analysisStep,
+    setAnalysisStep,
+  ] = useState(0);
+
+  /*
+   * -----------------------------------------------
+   * FINDING
+   * -----------------------------------------------
+   */
+
+  const [
+    selectedFindingId,
+    setSelectedFindingId,
+  ] =
     useState<string | null>(null);
 
-  const [inspectorNotes, setInspectorNotes] =
+  /*
+   * -----------------------------------------------
+   * INSPECTOR NOTES
+   * -----------------------------------------------
+   */
+
+  const [
+    inspectorNotes,
+    setInspectorNotes,
+  ] =
     useState<Record<string, string>>({});
 
-  const [inspectorDecisions, setInspectorDecisions] =
+  /*
+   * -----------------------------------------------
+   * INSPECTOR DECISIONS
+   * -----------------------------------------------
+   */
+
+  const [
+    inspectorDecisions,
+    setInspectorDecisions,
+  ] =
     useState<
       Record<
         string,
-        'CONFIRM' | 'REJECT' | 'MODIFY' | 'REQUEST_EVIDENCE'
+        | 'CONFIRM'
+        | 'REJECT'
+        | 'MODIFY'
+        | 'REQUEST_EVIDENCE'
       >
     >({});
 
-  const [remarksText, setRemarksText] =
-    useState('');
+  /*
+   * -----------------------------------------------
+   * REMARKS
+   * -----------------------------------------------
+   */
+
+  const [
+    remarksText,
+    setRemarksText,
+  ] = useState('');
 
   /*
-   * --------------------------------------------------
+   * ==================================================
    * NAVIGATION
-   * --------------------------------------------------
-   *
-   * IMPORTANT:
-   * useCallback keeps the navigate function stable
-   * between AppContext re-renders.
-   *
-   * AnalysisScreen depends on navigate inside its
-   * analysis useEffect. Without useCallback, every
-   * context update creates a new navigate function,
-   * causing that effect to restart/cancel.
+   * ==================================================
    */
 
-  const navigate = useCallback((s: Screen) => {
-    setScreen(s);
-  }, []);
+  const navigate =
+    useCallback((s: Screen) => {
+      setScreen(s);
+    }, []);
 
   /*
-   * --------------------------------------------------
-   * STORE IMAGE FOR A SPECIFIC PACKAGE SIDE
-   * --------------------------------------------------
+   * ==================================================
+   * LOGIN
+   * ==================================================
    */
 
-  const setCapturedImageForSide = (
-    side: PackageSide,
-    file: File | null
-  ) => {
-    setCapturedImages(
-      (previous) => {
-        const updated = {
-          ...previous,
-        };
+  const login = () => {
+    setIsLoggedIn(true);
 
-        if (file) {
-          updated[side] = file;
-        } else {
-          delete updated[side];
-        }
-
-        return updated;
-      }
-    );
-
-    /*
-     * Keep legacy state synchronized with the
-     * most recently captured image.
-     */
-
-    setCapturedImage(file);
+    setScreen('dashboard');
   };
+
+  /*
+   * ==================================================
+   * LOGOUT
+   * ==================================================
+   */
 
   const logout = () => {
     setIsLoggedIn(false);
 
     setScreen('login');
 
-    /*
-     * Clear active inspection.
-     */
-
     setCurrentInspection(null);
-
-    setCapturedSides([]);
-
-    setCapturedImages({});
 
     setCapturedImage(null);
 
     setBackendResult(null);
-
-    /*
-     * Clear historical inspection state.
-     */
 
     setHistoricalInspectionId(null);
 
@@ -502,27 +585,29 @@ export function AppProvider({
     setRemarksText('');
   };
 
-  const login = () => {
-    setIsLoggedIn(true);
-
-    setScreen('dashboard');
-  };
-
   /*
-   * --------------------------------------------------
-   * START NEW REAL INSPECTION
-   * --------------------------------------------------
+   * ==================================================
+   * START NEW INSPECTION
+   * ==================================================
    */
 
   const startNewInspection = () => {
     /*
-     * Starting a new inspection should not retain
-     * a previously selected historical inspection.
+     * Clear historical inspection.
      */
 
     setHistoricalInspectionId(null);
 
     setHistoricalInspection(null);
+
+    /*
+     * Create new inspection.
+     *
+     * isImported and saleType are retained internally
+     * for compatibility with the existing Inspection type
+     * and historical UI. They are no longer selected by
+     * the inspector or sent as manual classification.
+     */
 
     const inspection: Inspection = {
       id: generateId(),
@@ -568,17 +653,31 @@ export function AppProvider({
       remarks: '',
     };
 
-    setCurrentInspection(inspection);
+    setCurrentInspection(
+      inspection
+    );
 
-    setCapturedSides([]);
-
-    setCapturedImages({});
+    /*
+     * Reset single image.
+     */
 
     setCapturedImage(null);
 
+    /*
+     * Reset backend.
+     */
+
     setBackendResult(null);
 
+    /*
+     * Reset analysis.
+     */
+
     setAnalysisStep(0);
+
+    /*
+     * Reset review state.
+     */
 
     setSelectedFindingId(null);
 
@@ -588,103 +687,130 @@ export function AppProvider({
 
     setRemarksText('');
 
+    /*
+     * Go to new inspection.
+     */
+
     setScreen('new-inspection');
   };
 
   /*
-   * --------------------------------------------------
-   * APPLY REAL BACKEND RESULT
-   * --------------------------------------------------
+   * ==================================================
+   * APPLY BACKEND RESULT
+   * ==================================================
    */
 
   const applyBackendResultToInspection =
     useCallback(
       (result: BackendScanResult) => {
+        /*
+         * -------------------------------------------
+         * EXTRACTED DATA
+         * -------------------------------------------
+         */
+
         const extracted =
           result.extracted_data ?? {};
 
+        /*
+         * -------------------------------------------
+         * BACKEND FINDINGS
+         * -------------------------------------------
+         */
+
         const backendFindings =
-          result.compliance_report?.results ?? [];
+          result.compliance_report
+            ?.results ?? [];
 
-        const fieldToRequirement: Record<
-          string,
-          Requirement
-        > = {
-          mrp: {
-            id: 'REQ-BE-001',
+        /*
+         * -------------------------------------------
+         * REQUIREMENT MAPPING
+         * -------------------------------------------
+         */
 
-            ruleId: 'LM-R003',
+        const fieldToRequirement:
+          Record<string, Requirement> = {
+            mrp: {
+              id: 'REQ-BE-001',
 
-            name:
-              'Maximum Retail Price',
+              ruleId: 'LM-R003',
 
-            description:
-              'MRP inclusive of all taxes must be declared.',
+              name:
+                'Maximum Retail Price',
 
-            applicability:
-              'All packaged commodities sold in India',
-          },
+              description:
+                'MRP inclusive of all taxes must be declared.',
 
-          net_quantity: {
-            id: 'REQ-BE-002',
+              applicability:
+                'All packaged commodities sold in India',
+            },
 
-            ruleId: 'LM-R002',
+            net_quantity: {
+              id: 'REQ-BE-002',
 
-            name:
-              'Net Quantity',
+              ruleId: 'LM-R002',
 
-            description:
-              'Net quantity must be declared in standard units.',
+              name:
+                'Net Quantity',
 
-            applicability:
-              'All packaged commodities',
-          },
+              description:
+                'Net quantity must be declared in standard units.',
 
-          consumer_care: {
-            id: 'REQ-BE-003',
+              applicability:
+                'All packaged commodities',
+            },
 
-            ruleId: 'LM-R005',
+            consumer_care: {
+              id: 'REQ-BE-003',
 
-            name:
-              'Consumer Care Details',
+              ruleId: 'LM-R005',
 
-            description:
-              'Telephone number, email, or postal address for consumer grievance.',
+              name:
+                'Consumer Care Details',
 
-            applicability:
-              'All packaged commodities',
-          },
+              description:
+                'Telephone number, email, or postal address for consumer grievance.',
 
-          date_of_manufacture: {
-            id: 'REQ-BE-004',
+              applicability:
+                'All packaged commodities',
+            },
 
-            ruleId: 'LM-R006',
+            date_of_manufacture: {
+              id: 'REQ-BE-004',
 
-            name:
-              'Date of Manufacture',
+              ruleId: 'LM-R006',
 
-            description:
-              'Month and year of manufacture or packing must be declared.',
+              name:
+                'Date of Manufacture',
 
-            applicability:
-              'All packaged commodities',
-          },
+              description:
+                'Month and year of manufacture or packing must be declared.',
 
-          country_of_origin: {
-            id: 'REQ-BE-005',
+              applicability:
+                'All packaged commodities',
+            },
 
-            ruleId: 'LM-R004',
+            country_of_origin: {
+              id: 'REQ-BE-005',
 
-            name:
-              'Country of Origin',
+              ruleId: 'LM-R004',
 
-            description:
-              'Country of origin/manufacture must be declared for imported commodities.',
+              name:
+                'Country of Origin',
 
-            applicability:
-              'Imported packaged commodities',
-          },
-        };
+              description:
+                'Country of origin/manufacture must be declared when applicable.',
+
+              applicability:
+                'Determined from package evidence and classification',
+            },
+          };
+
+        /*
+         * -------------------------------------------
+         * ARRAYS
+         * -------------------------------------------
+         */
 
         const applicableRequirements:
           Requirement[] = [];
@@ -696,9 +822,9 @@ export function AppProvider({
           Finding[] = [];
 
         /*
-         * ------------------------------------------------
-         * BACKEND COMPLIANCE RESULTS
-         * ------------------------------------------------
+         * -------------------------------------------
+         * PROCESS BACKEND RESULTS
+         * -------------------------------------------
          */
 
         backendFindings.forEach(
@@ -708,9 +834,18 @@ export function AppProvider({
                 item.field
               ];
 
+            /*
+             * Ignore fields that do not
+             * have frontend requirement mapping.
+             */
+
             if (!requirement) {
               return;
             }
+
+            /*
+             * Add requirement only once.
+             */
 
             const requirementExists =
               applicableRequirements.some(
@@ -725,10 +860,18 @@ export function AppProvider({
               );
             }
 
+            /*
+             * Evidence ID.
+             */
+
             const evidenceId =
               `EV-BE-${String(
                 index + 1
               ).padStart(3, '0')}`;
+
+            /*
+             * Evidence status.
+             */
 
             let evidenceStatus:
               Evidence['status'] =
@@ -751,20 +894,10 @@ export function AppProvider({
             }
 
             /*
-             * Backend multi-image extraction may
-             * provide source_side inside extracted_data.
+             * ---------------------------------------
+             * SINGLE IMAGE EVIDENCE
+             * ---------------------------------------
              */
-
-            const extractedField =
-              extracted[item.field];
-
-            const sourceSide =
-              extractedField &&
-              typeof extractedField === 'object' &&
-              typeof extractedField.source_side ===
-                'string'
-                ? extractedField.source_side
-                : '';
 
             evidence.push({
               id: evidenceId,
@@ -785,9 +918,7 @@ export function AppProvider({
                   : 80,
 
               imageId:
-                sourceSide
-                  ? `SIDE-${sourceSide}`
-                  : '',
+                'INSPECTION-IMAGE',
 
               source:
                 item.verified_by_ocr
@@ -800,6 +931,12 @@ export function AppProvider({
               rawEvidence:
                 item.reason,
             });
+
+            /*
+             * ---------------------------------------
+             * FINDING STATUS
+             * ---------------------------------------
+             */
 
             let status:
               ComplianceStatus;
@@ -818,6 +955,12 @@ export function AppProvider({
               status =
                 'VERIFICATION_REQUIRED';
             }
+
+            /*
+             * ---------------------------------------
+             * FINDING
+             * ---------------------------------------
+             */
 
             findings.push({
               id:
@@ -858,9 +1001,9 @@ export function AppProvider({
         );
 
         /*
-         * ------------------------------------------------
-         * REAL PRODUCT EXTRACTION
-         * ------------------------------------------------
+         * ==================================================
+         * PRODUCT EXTRACTION
+         * ==================================================
          */
 
         const productName =
@@ -868,9 +1011,9 @@ export function AppProvider({
             'string'
             ? extracted.product_name
             : typeof extracted.name ===
-              'string'
-            ? extracted.name
-            : '';
+                'string'
+              ? extracted.name
+              : '';
 
         const manufacturerName =
           typeof extracted.manufacturer_name ===
@@ -878,14 +1021,13 @@ export function AppProvider({
             ? extracted.manufacturer_name
             : '';
 
-        if (productName) {
-          const productSide =
-            extracted.product_name &&
-            typeof extracted.product_name ===
-              'object'
-              ? extracted.product_name.source_side
-              : '';
+        /*
+         * -------------------------------------------
+         * PRODUCT NAME EVIDENCE
+         * -------------------------------------------
+         */
 
+        if (productName) {
           evidence.push({
             id:
               'EV-EXTRACT-PRODUCT',
@@ -902,9 +1044,7 @@ export function AppProvider({
             confidence: 90,
 
             imageId:
-              productSide
-                ? `SIDE-${productSide}`
-                : '',
+              'INSPECTION-IMAGE',
 
             source:
               'VISION',
@@ -917,14 +1057,13 @@ export function AppProvider({
           });
         }
 
-        if (manufacturerName) {
-          const manufacturerSide =
-            extracted.manufacturer_name &&
-            typeof extracted.manufacturer_name ===
-              'object'
-              ? extracted.manufacturer_name.source_side
-              : '';
+        /*
+         * -------------------------------------------
+         * MANUFACTURER EVIDENCE
+         * -------------------------------------------
+         */
 
+        if (manufacturerName) {
           evidence.push({
             id:
               'EV-EXTRACT-MANUFACTURER',
@@ -941,9 +1080,7 @@ export function AppProvider({
             confidence: 90,
 
             imageId:
-              manufacturerSide
-                ? `SIDE-${manufacturerSide}`
-                : '',
+              'INSPECTION-IMAGE',
 
             source:
               'VISION',
@@ -957,32 +1094,90 @@ export function AppProvider({
         }
 
         /*
-         * ------------------------------------------------
+         * ==================================================
          * UPDATE CURRENT INSPECTION
-         * ------------------------------------------------
+         * ==================================================
          */
 
         setCurrentInspection(
-          (previousInspection) => {
+          (
+            previousInspection
+          ): Inspection | null => {
+            /*
+             * No active inspection.
+             */
+
             if (!previousInspection) {
               console.warn(
                 'Backend result received but no active inspection exists.'
               );
 
-              return previousInspection;
+              return null;
             }
 
-            return {
+            /*
+             * Calculate status from the
+             * actual findings.
+             */
+
+            const overallStatus =
+              calculateOverallStatus(
+                findings
+              );
+
+            /*
+             * Explicitly construct an Inspection.
+             */
+
+            const updatedInspection:
+              Inspection = {
               ...previousInspection,
 
               product: {
                 ...previousInspection.product,
 
                 name:
-                  productName,
+                  productName ||
+                  previousInspection.product
+                    .name,
 
                 brand:
-                  manufacturerName,
+                  manufacturerName ||
+                  previousInspection.product
+                    .brand,
+
+                /*
+                 * Backend classification is evidence-derived.
+                 * Keep legacy fields synchronized when the
+                 * backend provides classification information.
+                 */
+
+                isImported:
+                  result.compliance_report
+                    ?.classification
+                    ?.origin ===
+                  'imported'
+                    ? true
+                    : result.compliance_report
+                        ?.classification
+                        ?.origin ===
+                      'domestic'
+                    ? false
+                    : previousInspection
+                        .product.isImported,
+
+                saleType:
+                  result.compliance_report
+                    ?.classification
+                    ?.sale_type ===
+                  'wholesale'
+                    ? 'wholesale'
+                    : result.compliance_report
+                        ?.classification
+                        ?.sale_type ===
+                      'institutional_or_industrial'
+                    ? 'institutional_or_industrial'
+                    : 'retail',
               },
 
               evidence,
@@ -991,12 +1186,10 @@ export function AppProvider({
 
               findings,
 
-              overallStatus:
-                result.compliance_report
-                  .failed > 0
-                  ? 'NON_COMPLIANT'
-                  : 'COMPLIANT',
+              overallStatus,
             };
+
+            return updatedInspection;
           }
         );
       },
@@ -1004,9 +1197,9 @@ export function AppProvider({
     );
 
   /*
-   * --------------------------------------------------
-   * INSPECTOR NOTES
-   * --------------------------------------------------
+   * ==================================================
+   * INSPECTOR NOTE
+   * ==================================================
    */
 
   const setInspectorNote = (
@@ -1023,9 +1216,9 @@ export function AppProvider({
   };
 
   /*
-   * --------------------------------------------------
-   * INSPECTOR DECISIONS
-   * --------------------------------------------------
+   * ==================================================
+   * INSPECTOR DECISION
+   * ==================================================
    */
 
   const setInspectorDecision = (
@@ -1037,18 +1230,29 @@ export function AppProvider({
       | 'MODIFY'
       | 'REQUEST_EVIDENCE'
   ) => {
+    /*
+     * Save decision.
+     */
+
     setInspectorDecisions(
       (previous) => ({
         ...previous,
 
-        [findingId]: decision,
+        [findingId]:
+          decision,
       })
     );
 
+    /*
+     * Update inspection.
+     */
+
     setCurrentInspection(
-      (previousInspection) => {
+      (
+        previousInspection
+      ): Inspection | null => {
         if (!previousInspection) {
-          return previousInspection;
+          return null;
         }
 
         const finding =
@@ -1064,7 +1268,13 @@ export function AppProvider({
         let updatedStatus:
           ComplianceStatus;
 
-        if (decision === 'CONFIRM') {
+        /*
+         * CONFIRM
+         */
+
+        if (
+          decision === 'CONFIRM'
+        ) {
           if (
             finding.status ===
             'VERIFICATION_REQUIRED'
@@ -1075,15 +1285,31 @@ export function AppProvider({
             updatedStatus =
               finding.status;
           }
-        } else if (
+        }
+
+        /*
+         * REJECT
+         */
+
+        else if (
           decision === 'REJECT'
         ) {
           updatedStatus =
             'COMPLIANT';
-        } else {
+        }
+
+        /*
+         * MODIFY / REQUEST EVIDENCE
+         */
+
+        else {
           updatedStatus =
             'VERIFICATION_REQUIRED';
         }
+
+        /*
+         * Update finding.
+         */
 
         const updatedFindings =
           previousInspection.findings.map(
@@ -1091,8 +1317,10 @@ export function AppProvider({
               item.id === findingId
                 ? {
                     ...item,
+
                     status:
                       updatedStatus,
+
                     reviewRequired:
                       updatedStatus !==
                       'COMPLIANT',
@@ -1100,12 +1328,21 @@ export function AppProvider({
                 : item
           );
 
+        /*
+         * Recalculate overall status.
+         */
+
         const updatedOverallStatus =
           calculateOverallStatus(
             updatedFindings
           );
 
-        return {
+        /*
+         * Explicit Inspection return.
+         */
+
+        const updatedInspection:
+          Inspection = {
           ...previousInspection,
 
           findings:
@@ -1114,16 +1351,32 @@ export function AppProvider({
           overallStatus:
             updatedOverallStatus,
         };
+
+        return updatedInspection;
       }
     );
   };
 
+  /*
+   * ==================================================
+   * PROVIDER
+   * ==================================================
+   */
+
   return (
     <AppContext.Provider
       value={{
+        /*
+         * Navigation
+         */
+
         screen,
 
         navigate,
+
+        /*
+         * Authentication
+         */
 
         isLoggedIn,
 
@@ -1131,31 +1384,37 @@ export function AppProvider({
 
         logout,
 
+        /*
+         * Inspection
+         */
+
         currentInspection,
 
         setCurrentInspection,
 
         startNewInspection,
 
-        capturedSides,
-
-        setCapturedSides,
-
-        capturedImages,
-
-        setCapturedImages,
-
-        setCapturedImageForSide,
+        /*
+         * SINGLE IMAGE
+         */
 
         capturedImage,
 
         setCapturedImage,
+
+        /*
+         * Backend
+         */
 
         backendResult,
 
         setBackendResult,
 
         applyBackendResultToInspection,
+
+        /*
+         * Historical inspection
+         */
 
         historicalInspectionId,
 
@@ -1165,21 +1424,41 @@ export function AppProvider({
 
         setHistoricalInspection,
 
+        /*
+         * Analysis
+         */
+
         analysisStep,
 
         setAnalysisStep,
+
+        /*
+         * Findings
+         */
 
         selectedFindingId,
 
         setSelectedFindingId,
 
+        /*
+         * Inspector notes
+         */
+
         inspectorNotes,
 
         setInspectorNote,
 
+        /*
+         * Inspector decisions
+         */
+
         inspectorDecisions,
 
         setInspectorDecision,
+
+        /*
+         * Remarks
+         */
 
         remarksText,
 
@@ -1190,6 +1469,12 @@ export function AppProvider({
     </AppContext.Provider>
   );
 }
+
+/*
+ * ==================================================
+ * useApp HOOK
+ * ==================================================
+ */
 
 export function useApp() {
   const ctx =

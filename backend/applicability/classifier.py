@@ -1,8 +1,7 @@
-# backend/applicability/classifier.py
-
 """
-Resolves, for a given classification, which mandatory_declarations
-rules actually apply to a package and whether each is required.
+Resolves, for a given classification and package evidence, which
+mandatory_declarations rules actually apply to a package and whether
+each is required.
 
 This module also exposes structured trace information so the compliance
 engine can explain HOW each rule reached its applicability/requirement
@@ -12,8 +11,10 @@ Responsibilities:
 
 1. Determine whether a rule is exempted for the package.
 2. Resolve conditional requirements.
-3. Return the resolved rule list.
-4. Provide trace metadata describing the decision path.
+3. Use package evidence where a conditional requirement depends on
+   detected declarations.
+4. Return the resolved rule list.
+5. Provide trace metadata describing the decision path.
 
 This module does NOT run rule check functions or evaluate scanned
 evidence. That remains engine/evaluator.py's responsibility.
@@ -26,14 +27,6 @@ import sys
 # --------------------------------------------------
 # Make this file runnable directly
 # --------------------------------------------------
-
-# When running:
-#     python applicability/classifier.py
-#
-# Python starts from the applicability/ directory.
-# Add the backend directory to sys.path so sibling
-# packages such as rules/, classification/, and
-# applicability/ can be imported correctly.
 
 BACKEND_DIR = os.path.dirname(
     os.path.dirname(
@@ -67,17 +60,10 @@ from applicability.conditions import (
 # Conditional requirement resolvers
 # --------------------------------------------------
 
-# Rule IDs whose "required" value depends on the
-# package classification rather than the static
-# "required" value inside the rule definition.
-
 CONDITIONAL_REQUIRED_RESOLVERS = {
     "LM-COO-01": requires_country_of_origin,
 }
 
-
-# Human-readable names for the conditional predicates.
-# These are used only for traceability/reporting.
 
 CONDITIONAL_REQUIRED_CONDITIONS = {
     "LM-COO-01": "requires_country_of_origin",
@@ -91,16 +77,13 @@ CONDITIONAL_REQUIRED_CONDITIONS = {
 def _resolve_required(
     rule: dict,
     classification: dict,
+    fused_evidence: dict | None = None,
 ) -> bool:
     """
-    Resolves whether a rule is actually required for
-    the supplied classification.
+    Resolves whether a rule is actually required.
 
-    Static rules:
-        Return the rule's static "required" value.
-
-    Conditional rules:
-        Execute the registered resolver predicate.
+    Conditional rules receive package evidence so that requirements
+    such as Country of Origin can be resolved using detected evidence.
     """
 
     resolver = CONDITIONAL_REQUIRED_RESOLVERS.get(
@@ -108,7 +91,17 @@ def _resolve_required(
     )
 
     if resolver:
-        return resolver(classification)
+
+        if rule["id"] == "LM-COO-01":
+
+            return resolver(
+                classification,
+                fused_evidence,
+            )
+
+        return resolver(
+            classification
+        )
 
     return rule["required"]
 
@@ -120,6 +113,7 @@ def _resolve_required(
 def _build_trace(
     rule: dict,
     classification: dict,
+    fused_evidence: dict | None,
     applicable: bool,
     required: bool,
     exempt: bool,
@@ -127,9 +121,6 @@ def _build_trace(
     """
     Builds structured trace information explaining
     how applicability and required-ness were resolved.
-
-    This does not perform any compliance check.
-    It only records the classification decision path.
     """
 
     trace = {
@@ -206,8 +197,40 @@ def _build_trace(
         )
 
         trace["requirement"]["decision"] = (
-            "Condition evaluated for package classification."
+            "Condition evaluated using package "
+            "classification and available evidence."
         )
+
+        if rule["id"] == "LM-COO-01":
+
+            country_data = {}
+
+            if isinstance(
+                fused_evidence,
+                dict,
+            ):
+                country_data = fused_evidence.get(
+                    "country_of_origin",
+                    {},
+                )
+
+            if isinstance(
+                country_data,
+                dict,
+            ):
+                country_value = country_data.get(
+                    "value"
+                )
+
+                trace["requirement"][
+                    "evidence_value"
+                ] = country_value
+
+                trace["requirement"][
+                    "evidence_present"
+                ] = bool(
+                    country_value
+                )
 
     else:
 
@@ -221,7 +244,7 @@ def _build_trace(
 
 
     # --------------------------------------------------
-    # Applicability trace for non-exempt rules
+    # Applicability trace
     # --------------------------------------------------
 
     trace["applicability"]["decision_source"] = (
@@ -241,13 +264,14 @@ def _build_trace(
 
 def get_applicable_rules(
     classification: dict,
+    fused_evidence: dict | None = None,
 ) -> list:
     """
     Returns MANDATORY_DECLARATION_RULES augmented with
-    classification-resolved applicability and requirement
-    information.
+    classification/evidence-resolved applicability and
+    requirement information.
 
-    Each returned rule contains all original rule keys:
+    Each returned rule contains:
 
         id
         field
@@ -255,15 +279,9 @@ def get_applicable_rules(
         legal_reference
         required
         check
-
-    plus:
-
         applicable
         exemption_reason
         trace
-
-    "trace" explains how the applicability and requirement
-    decisions were reached.
     """
 
     resolved = []
@@ -296,6 +314,7 @@ def get_applicable_rules(
             required = _resolve_required(
                 rule,
                 classification,
+                fused_evidence,
             )
 
 
@@ -319,6 +338,7 @@ def get_applicable_rules(
         trace = _build_trace(
             rule=rule,
             classification=classification,
+            fused_evidence=fused_evidence,
             applicable=applicable,
             required=required,
             exempt=exempt,
@@ -351,16 +371,17 @@ def get_applicable_rules(
 
 def get_applicable_required_rules(
     classification: dict,
+    fused_evidence: dict | None = None,
 ) -> list:
     """
-    Returns only rules that are both applicable and
-    required for the supplied classification.
+    Returns only rules that are both applicable and required.
     """
 
     return [
         rule
         for rule in get_applicable_rules(
-            classification
+            classification,
+            fused_evidence,
         )
         if rule["applicable"]
         and rule["required"]
@@ -378,10 +399,6 @@ if __name__ == "__main__":
     )
 
 
-    # --------------------------------------------------
-    # Test classifications
-    # --------------------------------------------------
-
     domestic_retail = build_classification(
         origin="domestic",
         sale_type="retail",
@@ -392,33 +409,46 @@ if __name__ == "__main__":
         sale_type="retail",
     )
 
-    domestic_wholesale = build_classification(
-        origin="domestic",
-        sale_type="wholesale",
-    )
+    india_evidence = {
+        "country_of_origin": {
+            "value": "India",
+        }
+    }
+
+    china_evidence = {
+        "country_of_origin": {
+            "value": "China",
+        }
+    }
+
+    no_country_evidence = {}
 
 
     test_cases = [
         (
-            "domestic_retail",
+            "domestic_retail + India evidence",
             domestic_retail,
+            india_evidence,
         ),
         (
-            "imported_retail",
+            "domestic_retail + no COO evidence",
+            domestic_retail,
+            no_country_evidence,
+        ),
+        (
+            "imported_retail + no COO evidence",
             imported_retail,
+            no_country_evidence,
         ),
         (
-            "domestic_wholesale",
-            domestic_wholesale,
+            "imported_retail + China evidence",
+            imported_retail,
+            china_evidence,
         ),
     ]
 
 
-    # --------------------------------------------------
-    # Run tests
-    # --------------------------------------------------
-
-    for label, classification in test_cases:
+    for label, classification, evidence in test_cases:
 
         print()
         print("=" * 70)
@@ -430,11 +460,16 @@ if __name__ == "__main__":
             classification,
         )
 
+        print(
+            "EVIDENCE:",
+            evidence,
+        )
+
         print()
 
-
         for rule in get_applicable_rules(
-            classification
+            classification,
+            evidence,
         ):
 
             print(
