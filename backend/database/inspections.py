@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime, timezone
 
+
 # The database file will live at backend/database/compliance.db
 DB_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -221,13 +222,72 @@ def update_inspector_review(
     return updated
 
 
+def _extract_product_name(extracted_data) -> str:
+    """
+    Extracts the product name from the stored evidence structure.
+
+    Nometra normally stores fields in the form:
+
+        "product_name": {
+            "value": "DETERGENT CAKE",
+            "source": "gemini_vision",
+            "verified_by_ocr": True
+        }
+
+    This helper also handles simpler historical formats so that
+    older inspections do not break.
+    """
+
+    if not isinstance(extracted_data, dict):
+        return ""
+
+    product_name = extracted_data.get(
+        "product_name"
+    )
+
+    # Current evidence structure
+    if isinstance(product_name, dict):
+
+        value = product_name.get(
+            "value"
+        )
+
+        if (
+            value is not None
+            and str(value).strip()
+        ):
+            return str(value).strip()
+
+        return ""
+
+    # Older/simple structure
+    if (
+        product_name is not None
+        and str(product_name).strip()
+    ):
+        return str(product_name).strip()
+
+    return ""
+
+
 def get_all_inspections() -> list:
     """
     Returns a summary list of all past inspections
     (most recent first).
 
-    Includes evidence integrity metadata and final
-    inspector review status.
+    Includes:
+
+    - inspection ID
+    - timestamp
+    - product name
+    - compliance status
+    - passed/failed counts
+    - evidence integrity metadata
+    - inspector review status
+
+    The full extracted_data and compliance_report are
+    intentionally not returned here because this endpoint
+    is used for the lightweight inspection history list.
     """
 
     conn = sqlite3.connect(DB_PATH)
@@ -241,6 +301,7 @@ def get_all_inspections() -> list:
             overall_status,
             passed,
             failed,
+            extracted_data,
             evidence_hash,
             evidence_timestamp,
             inspector_decisions,
@@ -257,7 +318,49 @@ def get_all_inspections() -> list:
     results = []
 
     for row in rows:
+
         result = dict(row)
+
+        # --------------------------------------------------
+        # Extract product name for inspection history
+        # --------------------------------------------------
+
+        try:
+            extracted_data = json.loads(
+                result.get(
+                    "extracted_data",
+                    "{}",
+                )
+            )
+        except (
+            json.JSONDecodeError,
+            TypeError,
+        ):
+            extracted_data = {}
+
+        product_name = _extract_product_name(
+            extracted_data
+        )
+
+        result["product_name"] = (
+            product_name
+            if product_name
+            else "Unnamed Product"
+        )
+
+        # --------------------------------------------------
+        # Full extracted_data is not returned in the
+        # history response.
+        # --------------------------------------------------
+
+        result.pop(
+            "extracted_data",
+            None,
+        )
+
+        # --------------------------------------------------
+        # Inspector review data
+        # --------------------------------------------------
 
         result["inspector_decisions"] = json.loads(
             result["inspector_decisions"]
@@ -327,11 +430,16 @@ if __name__ == "__main__":
     )
 
     fake_extracted = {
+        "product_name": {
+            "value": "TEST PRODUCT",
+            "source": "gemini_vision",
+            "verified_by_ocr": True,
+        },
         "mrp": {
             "value": "Rs. 20.00",
             "source": "gemini_vision",
             "verified_by_ocr": True,
-        }
+        },
     }
 
     fake_report = {
@@ -350,7 +458,8 @@ if __name__ == "__main__":
             "FND-TEST-001": "CONFIRM"
         },
         inspector_notes={
-            "FND-TEST-001": "Inspector confirmed declaration."
+            "FND-TEST-001":
+                "Inspector confirmed declaration."
         },
         inspector_remarks="Test inspector review.",
         final_status="COMPLIANT",

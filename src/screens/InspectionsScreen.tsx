@@ -12,6 +12,12 @@ type BackendInspection = {
   timestamp?: string;
   created_at?: string;
 
+  /*
+   * Product name returned directly by the
+   * inspection history API.
+   */
+  product_name?: string | null;
+
   overall_status?:
     | 'COMPLIANT'
     | 'NON_COMPLIANT'
@@ -25,6 +31,10 @@ type BackendInspection = {
   passed?: number;
   failed?: number;
 
+  /*
+   * Kept for compatibility with older
+   * inspection-history responses.
+   */
   extracted_data?: {
     product_name?: string | null;
     manufacturer_name?: string | null;
@@ -117,10 +127,17 @@ function normalizeInspection(
      * separately so historical inspection
      * lookup can call /inspections/<id>.
      */
-
     backendId: inspection.id,
 
+    /*
+     * The inspection-history backend now
+     * returns product_name directly.
+     *
+     * The extracted_data fallback is kept
+     * so older API responses remain compatible.
+     */
     productName:
+      inspection.product_name ||
       inspection.extracted_data
         ?.product_name ||
       inspection.extracted_data
@@ -209,11 +226,15 @@ export default function InspectionsScreen() {
           await response.json();
 
         /*
-         * Backend currently returns an array.
+         * Backend currently returns:
          *
-         * This also safely handles
-         * { inspections: [...] }
-         * if the API is wrapped later.
+         * {
+         *   success: true,
+         *   inspections: [...]
+         * }
+         *
+         * This also safely handles a
+         * direct array response.
          */
 
         const backendInspections:
@@ -292,7 +313,6 @@ export default function InspectionsScreen() {
       /*
        * Store the real backend inspection ID.
        */
-
       setHistoricalInspectionId(
         inspection.backendId
       );
@@ -302,7 +322,6 @@ export default function InspectionsScreen() {
        * historical record so the detail
        * screen knows it must fetch fresh data.
        */
-
       setHistoricalInspection(null);
 
       navigate(
