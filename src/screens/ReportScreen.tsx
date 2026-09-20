@@ -79,18 +79,12 @@ export default function ReportScreen() {
   /*
    * Export PDF
    *
-   * The backend exposes:
-   * GET /reports/<inspection_id>/pdf
+   * Production backend:
+   * https://nometra.onrender.com/reports/<inspection_id>/pdf
    *
    * IMPORTANT:
-   * Use the inspection ID returned by the backend,
-   * not the locally generated frontend inspection ID.
-   *
-   * Local development:
-   *   http://127.0.0.1:5000
-   *
-   * Vercel production:
-   *   https://nometra.onrender.com
+   * This intentionally uses the Render URL directly.
+   * There is NO localhost / 127.0.0.1 URL here.
    */
   const handleExportPDF = () => {
     const inspectionId = backendResult?.inspection_id;
@@ -100,12 +94,10 @@ export default function ReportScreen() {
       return;
     }
 
-    const apiBaseUrl = import.meta.env.DEV
-      ? 'http://127.0.0.1:5000'
-      : 'https://nometra.onrender.com';
-
     const pdfUrl =
-      `${apiBaseUrl}/reports/${inspectionId}/pdf`;
+      `https://nometra.onrender.com/reports/${inspectionId}/pdf`;
+
+    console.log('PDF URL:', pdfUrl);
 
     window.open(pdfUrl, '_blank');
   };
