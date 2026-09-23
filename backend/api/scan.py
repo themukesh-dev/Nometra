@@ -8,13 +8,20 @@ import inspect
 import json
 from datetime import datetime, timezone
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 
 # Allows this file to find sibling top-level folders
 # (extraction/, engine/, classification/, etc.)
-# when Flask runs this file directly.
 sys.path.append(
     os.path.dirname(
         os.path.dirname(
@@ -24,11 +31,21 @@ sys.path.append(
 )
 
 
-from extraction.gemini_vision import extract_label_data
-from extraction.ocr import extract_text_ocr
-from extraction.evidence_fusion import fuse_evidence
-from engine.evaluator import evaluate_rules
-from classification.categories import build_classification
+from extraction.gemini_vision import (
+    extract_label_data,
+)
+from extraction.ocr import (
+    extract_text_ocr,
+)
+from extraction.evidence_fusion import (
+    fuse_evidence,
+)
+from engine.evaluator import (
+    evaluate_rules,
+)
+from classification.categories import (
+    build_classification,
+)
 from database.inspections import (
     init_db,
     save_inspection,
@@ -56,17 +73,55 @@ print(
 
 print("SAVE_INSPECTION FUNCTION:")
 print(
-    inspect.signature(save_inspection)
+    inspect.signature(
+        save_inspection
+    )
 )
 
 
-app = Flask(__name__)
-CORS(app)
+# --------------------------------------------------
+# FastAPI application
+# --------------------------------------------------
+
+app = FastAPI(
+    title="Nometra API",
+    description=(
+        "Legal Metrology packaged commodity "
+        "inspection backend."
+    ),
+    version="1.0.0",
+)
 
 
-# Make sure the inspections table exists before
-# the app starts taking requests.
+# --------------------------------------------------
+# CORS
+# --------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://nometra.vercel.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --------------------------------------------------
+# Database initialization
+# --------------------------------------------------
+
 init_db()
+
+
+# --------------------------------------------------
+# Router
+# --------------------------------------------------
+
+router = APIRouter()
 
 
 # --------------------------------------------------
@@ -143,436 +198,45 @@ def _calculate_sha256(
 
 
 # --------------------------------------------------
-# Multi-image helpers
-# --------------------------------------------------
-
-def _get_uploaded_images():
-    """
-    Reads uploaded package images from the request.
-
-    Preferred format:
-
-        images -> multiple files
-        image_sides -> JSON array
-
-    Example:
-
-        images:
-            front.jpg
-            back.jpg
-            left.jpg
-            right.jpg
-
-        image_sides:
-            ["FRONT", "BACK", "LEFT", "RIGHT"]
-
-    Legacy format is also supported:
-
-        image -> single file
-
-    Returns:
-
-        [
-            {
-                "file": FileStorage,
-                "side": "FRONT"
-            },
-            ...
-        ]
-    """
-
-    uploaded_files = request.files.getlist(
-        "images"
-    )
-
-    uploaded_files = [
-        file
-        for file in uploaded_files
-        if file is not None
-        and file.filename
-    ]
-
-    # --------------------------------------------------
-    # Multi-image request
-    # --------------------------------------------------
-
-    if uploaded_files:
-
-        raw_sides = request.form.get(
-            "image_sides",
-            "[]",
-        )
-
-        try:
-            image_sides = json.loads(
-                raw_sides
-            )
-
-        except json.JSONDecodeError:
-            return None, (
-                "Invalid image_sides. "
-                "Expected a JSON array."
-            )
-
-        if not isinstance(
-            image_sides,
-            list,
-        ):
-            return None, (
-                "image_sides must be a JSON array."
-            )
-
-        if len(image_sides) != len(
-            uploaded_files
-        ):
-            return None, (
-                "The number of image_sides "
-                "must match the number of images."
-            )
-
-        normalized = []
-
-        for index, image_file in enumerate(
-            uploaded_files
-        ):
-
-            side = str(
-                image_sides[index]
-            ).strip().upper()
-
-            if not side:
-                side = (
-                    f"IMAGE_{index + 1}"
-                )
-
-            normalized.append(
-                {
-                    "file": image_file,
-                    "side": side,
-                }
-            )
-
-        return normalized, None
-
-    # --------------------------------------------------
-    # Legacy single-image request
-    # --------------------------------------------------
-
-    if "image" in request.files:
-
-        image_file = request.files[
-            "image"
-        ]
-
-        if (
-            image_file is not None
-            and image_file.filename
-        ):
-            return [
-                {
-                    "file": image_file,
-                    "side": "FRONT",
-                }
-            ], None
-
-    return None, (
-        "No image files provided. "
-        "Use form field name 'images' "
-        "for multi-image inspection or "
-        "'image' for a single image."
-    )
-
-
-def _candidate_is_better(
-    candidate: dict,
-    existing: dict,
-) -> bool:
-    """
-    Determines which extracted field should become
-    the primary value when the same field is found
-    on multiple package sides.
-
-    Priority:
-
-        1. A non-empty candidate replaces an empty
-           existing value.
-        2. An OCR-verified candidate replaces an
-           unverified existing value.
-        3. Otherwise keep the existing value.
-
-    Empty candidates never replace useful evidence.
-    """
-
-    candidate_value = candidate.get("value")
-    existing_value = existing.get("value")
-
-    candidate_has_value = (
-        candidate_value is not None
-        and str(candidate_value).strip() != ""
-    )
-
-    existing_has_value = (
-        existing_value is not None
-        and str(existing_value).strip() != ""
-    )
-
-    if candidate_has_value and not existing_has_value:
-        return True
-
-    if (
-        candidate_has_value
-        and existing_has_value
-        and candidate.get("verified_by_ocr", False)
-        and not existing.get("verified_by_ocr", False)
-    ):
-        return True
-
-    return False
-
-
-def _values_are_different(
-    first: dict,
-    second: dict,
-) -> bool:
-    """
-    Checks whether two extracted field values
-    conflict with one another.
-    """
-
-    first_value = first.get("value")
-    second_value = second.get("value")
-
-    if (
-        first_value is None
-        or str(first_value).strip() == ""
-        or second_value is None
-        or str(second_value).strip() == ""
-    ):
-        return False
-
-    return (
-        str(first_value).strip().lower()
-        != str(second_value).strip().lower()
-    )
-
-
-def _record_conflict(
-    conflicts: dict,
-    field: str,
-    candidate: dict,
-):
-    """
-    Records a non-empty candidate that conflicts
-    with another non-empty value already observed.
-    """
-
-    conflicts.setdefault(
-        field,
-        [],
-    )
-
-    conflicts[field].append(
-        {
-            "side": candidate.get(
-                "source_side"
-            ),
-            "value": candidate.get(
-                "value"
-            ),
-            "source": candidate.get(
-                "source"
-            ),
-            "verified_by_ocr":
-                candidate.get(
-                    "verified_by_ocr",
-                    False,
-                ),
-        }
-    )
-
-
-def _merge_multiview_evidence(
-    per_side_evidence: list,
-):
-    """
-    Combines evidence extracted independently
-    from each package side.
-
-    Empty/null evidence from one side must never
-    block valid evidence from another side.
-
-    When two non-empty values differ, the additional
-    value is retained in the conflict structure.
-
-    The selected primary value keeps its source_side
-    so the frontend can show which package view
-    supplied the evidence.
-    """
-
-    merged = {}
-    conflicts = {}
-
-    for side_result in per_side_evidence:
-
-        side = side_result.get(
-            "side",
-            "UNKNOWN",
-        )
-
-        evidence = (
-            side_result.get(
-                "evidence",
-                {},
-            )
-        )
-
-        if not isinstance(
-            evidence,
-            dict,
-        ):
-            continue
-
-        for field, raw_value in (
-            evidence.items()
-        ):
-
-            if not isinstance(
-                raw_value,
-                dict,
-            ):
-                continue
-
-            candidate = dict(
-                raw_value
-            )
-
-            candidate[
-                "source_side"
-            ] = side
-
-            candidate_value = candidate.get(
-                "value"
-            )
-
-            candidate_has_value = (
-                candidate_value is not None
-                and str(candidate_value).strip() != ""
-            )
-
-            if field not in merged:
-
-                merged[field] = candidate
-
-                continue
-
-            existing = merged[field]
-
-            existing_value = existing.get(
-                "value"
-            )
-
-            existing_has_value = (
-                existing_value is not None
-                and str(existing_value).strip() != ""
-            )
-
-            if (
-                candidate_has_value
-                and existing_has_value
-                and _values_are_different(
-                    candidate,
-                    existing,
-                )
-            ):
-
-                _record_conflict(
-                    conflicts,
-                    field,
-                    candidate,
-                )
-
-            if _candidate_is_better(
-                candidate,
-                existing,
-            ):
-
-                if (
-                    existing_has_value
-                    and candidate_has_value
-                    and _values_are_different(
-                        candidate,
-                        existing,
-                    )
-                ):
-                    existing_conflict = dict(
-                        existing
-                    )
-
-                    _record_conflict(
-                        conflicts,
-                        field,
-                        existing_conflict,
-                    )
-
-                merged[field] = candidate
-
-    return merged, conflicts
-
-
-def _build_combined_evidence_hash(
-    image_records: list,
-) -> str:
-    """
-    Builds a deterministic SHA-256 fingerprint
-    for the complete multi-view evidence set.
-    """
-
-    evidence_parts = []
-
-    for record in image_records:
-
-        evidence_parts.append(
-            f"{record['side']}:{record['hash']}"
-        )
-
-    canonical_evidence = "|".join(
-        evidence_parts
-    )
-
-    return hashlib.sha256(
-        canonical_evidence.encode(
-            "utf-8"
-        )
-    ).hexdigest()
-
-
-# --------------------------------------------------
 # Scan endpoint
 # --------------------------------------------------
 
-@app.route(
-    "/scan",
-    methods=["POST"],
+@router.post(
+    "/scan"
 )
-def scan_label():
+async def scan_label(
+    images: list[UploadFile] = File(
+        ...
+    ),
+    image_sides: str = Form(
+        "[]"
+    ),
+    category: str = Form(
+        "Other"
+    ),
+):
     """
-    Accepts one or multiple package images.
+    Accepts one package image.
+
+    Current Nometra frontend contract:
+
+        images       -> one uploaded image
+        image_sides  -> ["FRONT"]
+        category     -> selected category
 
     Full Nometra pipeline:
 
-        Package Images
+        Package Image
               ↓
         Image Validation
               ↓
         SHA-256 + Timestamp
               ↓
-        Gemini Vision per side
+        Gemini Vision
               ↓
-        Tesseract OCR per side
+        Tesseract OCR
               ↓
-        Evidence Fusion per side
-              ↓
-        Multi-view Evidence Merge
+        Evidence Fusion
               ↓
         Classification
               ↓
@@ -585,179 +249,247 @@ def scan_label():
         Compliance Report
     """
 
-    # --------------------------------------------------
-    # 1. Validate uploaded images
-    # --------------------------------------------------
-
-    image_entries, image_error = (
-        _get_uploaded_images()
-    )
-
-    if image_error:
-        return jsonify({
-            "error": image_error
-        }), 400
-
-    if not image_entries:
-        return jsonify({
-            "error": (
-                "No package images were provided."
-            )
-        }), 400
-
-    print(
-        "NUMBER OF IMAGES RECEIVED:",
-        len(image_entries),
-    )
-
-    for entry in image_entries:
-        print(
-            "  side:",
-            entry["side"],
-            "| filename:",
-            entry["file"].filename,
-        )
-
-    # --------------------------------------------------
-    # 2. Validate file names and extensions
-    # --------------------------------------------------
-
-    for entry in image_entries:
-
-        image_file = entry[
-            "file"
-        ]
-
-        if (
-            not image_file.filename
-        ):
-            return jsonify({
-                "error": (
-                    "One of the uploaded files "
-                    "has no filename."
-                )
-            }), 400
-
-        if not _allowed_file(
-            image_file.filename
-        ):
-            return jsonify({
-                "error": (
-                    f"Unsupported file type for "
-                    f"'{image_file.filename}'. "
-                    "Use jpg, jpeg, png, or webp."
-                )
-            }), 400
-
-    # --------------------------------------------------
-    # 3. Read classification from frontend
-    # --------------------------------------------------
-
-    category = request.form.get(
-        "category",
-        "Other",
-    )
-
-    origin = request.form.get(
-        "origin",
-        "domestic",
-    )
-
-    sale_type = request.form.get(
-        "sale_type",
-        "retail",
-    )
-
-    print(
-        "CLASSIFICATION RECEIVED:"
-    )
-
-    print(
-        "  category:",
-        category,
-    )
-
-    print(
-        "  origin:",
-        origin,
-    )
-
-    print(
-        "  sale_type:",
-        sale_type,
-    )
-
-    # --------------------------------------------------
-    # 4. Build backend classification
-    # --------------------------------------------------
-
-    try:
-
-        classification = (
-            build_classification(
-                origin=origin,
-                sale_type=sale_type,
-            )
-        )
-
-    except ValueError as e:
-
-        return jsonify({
-            "error":
-                f"Invalid classification: {str(e)}"
-        }), 400
-
-    # --------------------------------------------------
-    # 5. Save all images temporarily
-    # --------------------------------------------------
-
     temporary_images = []
 
     try:
 
-        for entry in image_entries:
+        # --------------------------------------------------
+        # 1. Validate uploaded image
+        # --------------------------------------------------
 
-            image_file = entry[
-                "file"
-            ]
+        valid_images = [
+            image
+            for image in images
+            if image is not None
+            and image.filename
+        ]
 
-            side = entry[
-                "side"
-            ]
+        if not valid_images:
 
-            file_extension = (
-                image_file.filename
-                .rsplit(
-                    ".",
-                    1,
-                )[1]
-                .lower()
-            )
-
-            temp_filename = (
-                f"{uuid.uuid4()}.{file_extension}"
-            )
-
-            temp_path = os.path.join(
-                UPLOAD_FOLDER,
-                temp_filename,
-            )
-
-            image_file.save(
-                temp_path
-            )
-
-            temporary_images.append(
-                {
-                    "side": side,
-                    "path": temp_path,
-                    "original_filename":
-                        image_file.filename,
-                }
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "No package image was provided."
+                    )
+                },
             )
 
         # --------------------------------------------------
-        # 6. Evidence integrity metadata
+        # Current product flow is SINGLE IMAGE
+        # --------------------------------------------------
+
+        if len(valid_images) != 1:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Nometra currently supports "
+                        "one package image per inspection."
+                    )
+                },
+            )
+
+        image_file = valid_images[0]
+
+        print(
+            "NUMBER OF IMAGES RECEIVED:",
+            len(valid_images),
+        )
+
+        print(
+            "FILENAME:",
+            image_file.filename,
+        )
+
+        # --------------------------------------------------
+        # 2. Validate image_sides
+        # --------------------------------------------------
+
+        try:
+
+            parsed_sides = json.loads(
+                image_sides
+            )
+
+        except json.JSONDecodeError:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Invalid image_sides. "
+                        "Expected a JSON array."
+                    )
+                },
+            )
+
+        if not isinstance(
+            parsed_sides,
+            list,
+        ):
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "image_sides must be "
+                        "a JSON array."
+                    )
+                },
+            )
+
+        if len(parsed_sides) != 1:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Exactly one image side "
+                        "must be provided."
+                    )
+                },
+            )
+
+        side = str(
+            parsed_sides[0]
+        ).strip().upper()
+
+        if not side:
+            side = "FRONT"
+
+        # --------------------------------------------------
+        # 3. Validate filename
+        # --------------------------------------------------
+
+        if not image_file.filename:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "The uploaded image "
+                        "has no filename."
+                    )
+                },
+            )
+
+        if not _allowed_file(
+            image_file.filename
+        ):
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        f"Unsupported file type for "
+                        f"'{image_file.filename}'. "
+                        "Use jpg, jpeg, png, or webp."
+                    )
+                },
+            )
+
+        # --------------------------------------------------
+        # 4. Classification
+        # --------------------------------------------------
+
+        category = (
+            str(category).strip()
+            if category
+            else "Other"
+        )
+
+        # Frontend no longer sends origin/sale_type.
+        # Backend uses the current defaults.
+
+        origin = "domestic"
+        sale_type = "retail"
+
+        print(
+            "CLASSIFICATION:"
+        )
+
+        print(
+            "  category:",
+            category,
+        )
+
+        print(
+            "  origin:",
+            origin,
+        )
+
+        print(
+            "  sale_type:",
+            sale_type,
+        )
+
+        try:
+
+            classification = (
+                build_classification(
+                    origin=origin,
+                    sale_type=sale_type,
+                )
+            )
+
+        except ValueError as e:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error":
+                        f"Invalid classification: {str(e)}"
+                },
+            )
+
+        # --------------------------------------------------
+        # 5. Save uploaded image temporarily
+        # --------------------------------------------------
+
+        file_extension = (
+            image_file.filename
+            .rsplit(
+                ".",
+                1,
+            )[1]
+            .lower()
+        )
+
+        temp_filename = (
+            f"{uuid.uuid4()}.{file_extension}"
+        )
+
+        temp_path = os.path.join(
+            UPLOAD_FOLDER,
+            temp_filename,
+        )
+
+        image_bytes = (
+            await image_file.read()
+        )
+
+        with open(
+            temp_path,
+            "wb",
+        ) as output_file:
+
+            output_file.write(
+                image_bytes
+            )
+
+        temporary_images.append(
+            {
+                "side": side,
+                "path": temp_path,
+                "original_filename":
+                    image_file.filename,
+            }
+        )
+
+        # --------------------------------------------------
+        # 6. Evidence integrity
         # --------------------------------------------------
 
         evidence_timestamp = (
@@ -766,7 +498,11 @@ def scan_label():
             ).isoformat()
         )
 
-        image_records = []
+        image_hash = (
+            _calculate_sha256(
+                temp_path
+            )
+        )
 
         print(
             "EVIDENCE INTEGRITY:"
@@ -781,232 +517,75 @@ def scan_label():
             evidence_timestamp,
         )
 
-        for image in temporary_images:
+        print(
+            "  hash:",
+            image_hash,
+        )
 
-            image_hash = (
-                _calculate_sha256(
-                    image["path"]
-                )
-            )
+        # For the current single-image flow,
+        # the combined evidence hash is the image hash.
+        combined_evidence_hash = image_hash
 
-            image_record = {
-                "side": image[
-                    "side"
-                ],
+        # --------------------------------------------------
+        # 7. Gemini Vision
+        # --------------------------------------------------
 
-                "filename":
-                    image[
-                        "original_filename"
-                    ],
+        print(
+            "GEMINI VISION:",
+            side,
+        )
 
-                "hash":
-                    image_hash,
-            }
-
-            image_records.append(
-                image_record
-            )
-
-            print(
-                "  ",
-                image["side"],
-                "hash:",
-                image_hash,
-            )
-
-        combined_evidence_hash = (
-            _build_combined_evidence_hash(
-                image_records
+        gemini_result = (
+            extract_label_data(
+                temp_path
             )
         )
 
         print(
-            "  combined hash:",
-            combined_evidence_hash,
+            "GEMINI COUNTRY OF ORIGIN:",
+            gemini_result.get(
+                "country_of_origin"
+            )
+            if isinstance(
+                gemini_result,
+                dict,
+            )
+            else None,
         )
 
         # --------------------------------------------------
-        # 7. Process every package side
+        # 8. OCR
         # --------------------------------------------------
 
-        per_side_evidence = []
+        print(
+            "TESSERACT OCR:",
+            side,
+        )
 
-        per_side_processing = []
-
-        for image in temporary_images:
-
-            side = image[
-                "side"
-            ]
-
-            temp_path = image[
-                "path"
-            ]
-
-            print("")
-            print(
-                "======================================"
+        ocr_result = (
+            extract_text_ocr(
+                temp_path
             )
-
-            print(
-                "PROCESSING SIDE:",
-                side,
-            )
-
-            print(
-                "======================================"
-            )
-
-            # --------------------------------------------------
-            # Gemini Vision
-            # --------------------------------------------------
-
-            print(
-                "GEMINI VISION:",
-                side,
-            )
-
-            gemini_result = (
-                extract_label_data(
-                    temp_path
-                )
-            )
-
-            print(
-                "GEMINI COUNTRY OF ORIGIN:",
-                gemini_result.get(
-                    "country_of_origin"
-                )
-                if isinstance(
-                    gemini_result,
-                    dict,
-                )
-                else None,
-            )
-
-            # --------------------------------------------------
-            # OCR
-            # --------------------------------------------------
-
-            print(
-                "TESSERACT OCR:",
-                side,
-            )
-
-            ocr_result = (
-                extract_text_ocr(
-                    temp_path
-                )
-            )
-
-            # --------------------------------------------------
-            # Evidence fusion
-            # --------------------------------------------------
-
-            print(
-                "EVIDENCE FUSION:",
-                side,
-            )
-
-            fused_side_evidence = (
-                fuse_evidence(
-                    gemini_result,
-                    ocr_result,
-                )
-            )
-
-            print(
-                "FUSED COUNTRY OF ORIGIN:",
-                json.dumps(
-                    fused_side_evidence.get(
-                        "country_of_origin"
-                    ),
-                    indent=2,
-                    ensure_ascii=False,
-                ),
-            )
-
-            print(
-                "FUSED NON-EMPTY FIELDS:",
-                [
-                    field_name
-                    for field_name, field_value
-                    in fused_side_evidence.items()
-                    if isinstance(field_value, dict)
-                    and field_value.get("value") is not None
-                    and str(field_value.get("value")).strip() != ""
-                ],
-            )
-
-            per_side_evidence.append(
-                {
-                    "side": side,
-
-                    "evidence":
-                        fused_side_evidence,
-                }
-            )
-
-            per_side_processing.append(
-                {
-                    "side": side,
-
-                    "gemini_fields":
-                        sum(
-                            1
-                            for field_name, field_value
-                            in (
-                                gemini_result.items()
-                                if isinstance(
-                                    gemini_result,
-                                    dict,
-                                )
-                                else []
-                            )
-                            if field_name != "source"
-                            and field_value is not None
-                            and str(field_value).strip() != ""
-                        ),
-
-                    "ocr_result_available":
-                        bool(
-                            ocr_result
-                        ),
-                }
-            )
+        )
 
         # --------------------------------------------------
-        # 8. Merge evidence from all package sides
+        # 9. Evidence fusion
         # --------------------------------------------------
 
-        (
-            fused_evidence,
-            multi_view_conflicts,
-        ) = _merge_multiview_evidence(
-            per_side_evidence
+        print(
+            "EVIDENCE FUSION:",
+            side,
         )
 
-        print("")
-        print(
-            "MULTI-VIEW EVIDENCE MERGE COMPLETE"
-        )
-
-        print(
-            "  images:",
-            len(
-                temporary_images
-            ),
+        fused_evidence = (
+            fuse_evidence(
+                gemini_result,
+                ocr_result,
+            )
         )
 
         print(
-            "  fields:",
-            len(
-                fused_evidence
-            ),
-        )
-
-        print(
-            "MERGED COUNTRY OF ORIGIN:",
+            "FUSED COUNTRY OF ORIGIN:",
             json.dumps(
                 fused_evidence.get(
                     "country_of_origin"
@@ -1016,61 +595,105 @@ def scan_label():
             ),
         )
 
-        if multi_view_conflicts:
-
-            print(
-                "  conflicts detected:"
-            )
-
-            for field, conflicts in (
-                multi_view_conflicts.items()
-            ):
-
-                print(
-                    "   ",
-                    field,
-                    ":",
-                    len(conflicts),
-                    "additional value(s)",
+        print(
+            "FUSED NON-EMPTY FIELDS:",
+            [
+                field_name
+                for field_name, field_value
+                in fused_evidence.items()
+                if (
+                    isinstance(
+                        field_value,
+                        dict,
+                    )
+                    and field_value.get(
+                        "value"
+                    ) is not None
+                    and str(
+                        field_value.get(
+                            "value"
+                        )
+                    ).strip() != ""
                 )
+            ],
+        )
 
         # --------------------------------------------------
-        # 9. Attach multi-view metadata
+        # 10. Attach single-image metadata
         # --------------------------------------------------
 
         fused_evidence[
             "_multi_view"
         ] = {
-            "image_count":
-                len(
-                    temporary_images
-                ),
+            "image_count": 1,
 
             "sides": [
-                image[
-                    "side"
-                ]
-                for image in temporary_images
+                side
             ],
 
-            "images":
-                image_records,
+            "images": [
+                {
+                    "side": side,
+                    "filename":
+                        image_file.filename,
+                    "hash":
+                        image_hash,
+                }
+            ],
 
-            "processing":
-                per_side_processing,
+            "processing": [
+                {
+                    "side": side,
 
-            "conflicts":
-                multi_view_conflicts,
+                    "gemini_fields":
+                        sum(
+                            1
+                            for (
+                                field_name,
+                                field_value,
+                            ) in (
+                                gemini_result.items()
+                                if isinstance(
+                                    gemini_result,
+                                    dict,
+                                )
+                                else []
+                            )
+                            if (
+                                field_name
+                                != "source"
+                                and field_value
+                                is not None
+                                and str(
+                                    field_value
+                                ).strip()
+                                != ""
+                            )
+                        ),
+
+                    "ocr_result_available":
+                        bool(
+                            ocr_result
+                        ),
+                }
+            ],
+
+            "conflicts": {},
         }
 
         # --------------------------------------------------
-        # 10. Rule engine
+        # 11. Rule engine
         # --------------------------------------------------
 
         print("")
-        print("========== COO DEBUG ==========")
+        print(
+            "========== COO DEBUG =========="
+        )
 
-        print("CLASSIFICATION:")
+        print(
+            "CLASSIFICATION:"
+        )
+
         print(
             json.dumps(
                 classification,
@@ -1079,8 +702,10 @@ def scan_label():
             )
         )
 
-        print("")
-        print("FUSED COUNTRY OF ORIGIN:")
+        print(
+            "FUSED COUNTRY OF ORIGIN:"
+        )
+
         print(
             json.dumps(
                 fused_evidence.get(
@@ -1098,21 +723,28 @@ def scan_label():
             )
         )
 
-        print("")
-        print("COO RULE RESULT:")
+        print(
+            "COO RULE RESULT:"
+        )
+
         print(
             json.dumps(
                 [
                     result
-                    for result in compliance_report.get(
+                    for result
+                    in compliance_report.get(
                         "results",
-                        []
+                        [],
                     )
                     if (
-                        result.get("rule_id")
+                        result.get(
+                            "rule_id"
+                        )
                         == "LM-COO-01"
                         or
-                        result.get("field")
+                        result.get(
+                            "field"
+                        )
                         == "country_of_origin"
                     )
                 ],
@@ -1121,11 +753,13 @@ def scan_label():
             )
         )
 
-        print("================================")
+        print(
+            "================================"
+        )
         print("")
 
         # --------------------------------------------------
-        # 11. Save real inspection
+        # 12. Save inspection
         # --------------------------------------------------
 
         print(
@@ -1133,7 +767,7 @@ def scan_label():
         )
 
         print(
-            "  combined evidence_hash:",
+            "  evidence_hash:",
             combined_evidence_hash,
         )
 
@@ -1154,7 +788,7 @@ def scan_label():
         )
 
         # --------------------------------------------------
-        # 12. Return complete response
+        # 13. Complete response
         # --------------------------------------------------
 
         response = {
@@ -1197,36 +831,31 @@ def scan_label():
                 "timestamp":
                     evidence_timestamp,
 
-                "images":
-                    image_records,
+                "images": [
+                    {
+                        "side": side,
+                        "filename":
+                            image_file.filename,
+                        "hash":
+                            image_hash,
+                    }
+                ],
             },
 
             "multi_view": {
-                "enabled":
-                    len(
-                        temporary_images
-                    ) > 1,
+                "enabled": False,
 
-                "image_count":
-                    len(
-                        temporary_images
-                    ),
+                "image_count": 1,
 
                 "sides": [
-                    image[
-                        "side"
-                    ]
-                    for image in temporary_images
+                    side
                 ],
 
-                "conflicts":
-                    multi_view_conflicts,
+                "conflicts": {},
             },
         }
 
-        return jsonify(
-            response
-        ), 200
+        return response
 
     except Exception as e:
 
@@ -1235,16 +864,19 @@ def scan_label():
             str(e),
         )
 
-        return jsonify({
-            "error": (
-                f"Processing failed: {str(e)}"
-            )
-        }), 500
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": (
+                    f"Processing failed: {str(e)}"
+                )
+            },
+        )
 
     finally:
 
         # --------------------------------------------------
-        # Always remove all temporary images.
+        # Always remove temporary image.
         # --------------------------------------------------
 
         for image in temporary_images:
@@ -1256,21 +888,28 @@ def scan_label():
             if os.path.exists(
                 temp_path
             ):
-                os.remove(
-                    temp_path
-                )
+
+                try:
+                    os.remove(
+                        temp_path
+                    )
+                except OSError as cleanup_error:
+                    print(
+                        "TEMP FILE CLEANUP ERROR:",
+                        cleanup_error,
+                    )
 
 
 # --------------------------------------------------
 # Inspector review endpoint
 # --------------------------------------------------
 
-@app.route(
-    "/inspections/<int:inspection_id>/review",
-    methods=["PUT"],
+@router.put(
+    "/inspections/{inspection_id}/review"
 )
-def save_inspector_review(
-    inspection_id,
+async def save_inspector_review(
+    inspection_id: int,
+    data: dict,
 ):
     """
     Persists the inspector's review for an
@@ -1285,25 +924,15 @@ def save_inspector_review(
 
     if inspection is None:
 
-        return jsonify({
-            "error": (
-                f"No inspection found with id "
-                f"{inspection_id}"
-            )
-        }), 404
-
-    data = request.get_json(
-        silent=True
-    )
-
-    if data is None:
-
-        return jsonify({
-            "error": (
-                "Request body must contain "
-                "valid JSON."
-            )
-        }), 400
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": (
+                    f"No inspection found with id "
+                    f"{inspection_id}"
+                )
+            },
+        )
 
     inspector_decisions = data.get(
         "inspector_decisions",
@@ -1329,36 +958,45 @@ def save_inspector_review(
         dict,
     ):
 
-        return jsonify({
-            "error": (
-                "inspector_decisions "
-                "must be an object."
-            )
-        }), 400
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "inspector_decisions "
+                    "must be an object."
+                )
+            },
+        )
 
     if not isinstance(
         inspector_notes,
         dict,
     ):
 
-        return jsonify({
-            "error": (
-                "inspector_notes "
-                "must be an object."
-            )
-        }), 400
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "inspector_notes "
+                    "must be an object."
+                )
+            },
+        )
 
     if not isinstance(
         inspector_remarks,
         str,
     ):
 
-        return jsonify({
-            "error": (
-                "inspector_remarks "
-                "must be a string."
-            )
-        }), 400
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "inspector_remarks "
+                    "must be a string."
+                )
+            },
+        )
 
     if (
         final_status is not None
@@ -1368,12 +1006,15 @@ def save_inspector_review(
         )
     ):
 
-        return jsonify({
-            "error": (
-                "final_status must be "
-                "a string or null."
-            )
-        }), 400
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "final_status must be "
+                    "a string or null."
+                )
+            },
+        )
 
     updated = (
         update_inspector_review(
@@ -1396,12 +1037,15 @@ def save_inspector_review(
 
     if not updated:
 
-        return jsonify({
-            "error": (
-                f"Failed to update inspection "
-                f"{inspection_id}."
-            )
-        }), 500
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": (
+                    f"Failed to update inspection "
+                    f"{inspection_id}."
+                )
+            },
+        )
 
     updated_inspection = (
         get_inspection_by_id(
@@ -1409,24 +1053,23 @@ def save_inspector_review(
         )
     )
 
-    return jsonify({
+    return {
         "message":
             "Inspector review saved.",
 
         "inspection":
             updated_inspection,
-    }), 200
+    }
 
 
 # --------------------------------------------------
 # Historical inspections
 # --------------------------------------------------
 
-@app.route(
-    "/inspections",
-    methods=["GET"],
+@router.get(
+    "/inspections"
 )
-def list_inspections():
+async def list_inspections():
     """
     Returns a summary list of every past scan
     (most recent first).
@@ -1436,18 +1079,17 @@ def list_inspections():
         get_all_inspections()
     )
 
-    return jsonify({
+    return {
         "inspections":
             inspections
-    }), 200
+    }
 
 
-@app.route(
-    "/inspections/<int:inspection_id>",
-    methods=["GET"],
+@router.get(
+    "/inspections/{inspection_id}"
 )
-def get_inspection(
-    inspection_id,
+async def get_inspection(
+    inspection_id: int,
 ):
     """
     Returns full detail for one past scan.
@@ -1461,47 +1103,75 @@ def get_inspection(
 
     if inspection is None:
 
-        return jsonify({
-            "error": (
-                f"No inspection found with id "
-                f"{inspection_id}"
-            )
-        }), 404
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": (
+                    f"No inspection found with id "
+                    f"{inspection_id}"
+                )
+            },
+        )
 
-    return jsonify(
-        inspection
-    ), 200
+    return inspection
 
 
 # --------------------------------------------------
 # Health check
 # --------------------------------------------------
 
-@app.route(
-    "/health",
-    methods=["GET"],
+@router.get(
+    "/health"
 )
-def health_check():
+async def health_check():
 
-    return jsonify({
+    return {
         "status": "ok"
-    }), 200
+    }
+
+
+# --------------------------------------------------
+# Register API routes
+# --------------------------------------------------
+
+app.include_router(
+    router
+)
 
 
 # --------------------------------------------------
 # Report routes
 # --------------------------------------------------
 
-import api.reports
+try:
+
+    from api.reports import (
+        router as reports_router,
+    )
+
+    app.include_router(
+        reports_router
+    )
+
+except ImportError as e:
+
+    print(
+        "REPORT ROUTER NOT LOADED:",
+        e,
+    )
 
 
 # --------------------------------------------------
-# Run Flask
+# Uvicorn entry point
 # --------------------------------------------------
 
 if __name__ == "__main__":
 
-    app.run(
-        debug=True,
+    import uvicorn
+
+    uvicorn.run(
+        "api.scan:app",
+        host="0.0.0.0",
         port=5000,
+        reload=True,
     )
