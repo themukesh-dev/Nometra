@@ -3,52 +3,71 @@
 """
 Pre-extraction image quality gate.
 
-This module is NOT yet wired into api/scan.py. It's a planned refactor
-piece: once ready, scan.py would call check_image_quality(temp_path)
-on the saved upload BEFORE handing that same path to
-extraction.ocr.extract_text_ocr() and extraction.gemini_vision.extract_label_data(),
-so a bad photo (too small, too dark, too blurry) can be rejected early
-with a clear reason instead of silently producing garbage OCR/Gemini output.
+This module provides lightweight, explainable image-quality checks
+before OCR/Gemini extraction.
 
-Deliberately uses only Pillow (already a hard dependency of both existing
-extraction modules) rather than numpy/opencv, since requirements.txt is
-not to be modified for this task.
+OpenCV is used for:
+    - Image loading
+    - Grayscale conversion
+    - Brightness analysis
+    - Laplacian-based sharpness analysis
+
+Pillow is used for basic image-file validation.
+
+The original uploaded image is never modified by this module.
+
+Quality checks:
+    1. Resolution
+    2. Brightness
+    3. Sharpness / blur detection
 """
 
-from PIL import Image, ImageStat, ImageFilter
+import cv2
+from PIL import Image
 
-# --- Heuristic thresholds ---
-# These are simple, explainable cutoffs suitable for a hackathon demo,
-# not a tuned production model.
+
+# -------------------------------------------------------------
+# Quality thresholds
+# -------------------------------------------------------------
 
 MIN_WIDTH = 400
 MIN_HEIGHT = 400
 
-# Mean brightness (0-255 grayscale) below/above these is considered
-# too dark / too washed-out to reliably read printed text.
+# Mean brightness:
+# 0   = completely black
+# 255 = completely white
 MIN_BRIGHTNESS = 40
 MAX_BRIGHTNESS = 235
 
-# Sharpness proxy: standard deviation of pixel intensity after an
-# edge-detection filter. Blurry images have soft, low-contrast edges
-# and so a low stddev here; sharp images have a high stddev.
-MIN_SHARPNESS = 8.0
+# Laplacian variance threshold for blur detection.
+#
+# Lower values generally indicate weaker/fewer sharp edges,
+# which is characteristic of blurry images.
+#
+# This is a hackathon-oriented heuristic, not a production-
+# calibrated computer-vision model.
+MIN_SHARPNESS = 50.0
 
 
 def check_image_quality(image_path: str) -> dict:
     """
-    Runs a set of lightweight checks against a label photo to decide
-    whether it's good enough to send into OCR/Gemini extraction.
+    Runs lightweight image-quality checks against a label photo.
+
+    Checks:
+        - Image resolution
+        - Average brightness
+        - Image sharpness using Laplacian variance
 
     Args:
-        image_path: path to the image file, same contract as
-                    extract_text_ocr() and extract_label_data().
+        image_path:
+            Path to the image file.
 
     Returns:
         On success:
+
             {
                 "is_acceptable": bool,
-                "issues": [str, ...],       # reasons it failed (empty if passed)
+                "issues": [str, ...],
                 "metrics": {
                     "width": int,
                     "height": int,
@@ -57,68 +76,195 @@ def check_image_quality(image_path: str) -> dict:
                 },
                 "source": "image_quality"
             }
-        On failure to even open/process the image:
+
+        On failure:
+
             {
                 "error": str,
                 "source": "image_quality"
             }
     """
+
     try:
-        image = Image.open(image_path)
 
-        width, height = image.size
+        # ---------------------------------------------------------
+        # 1. Validate image file
+        # ---------------------------------------------------------
 
-        # Convert to grayscale once — used for both brightness and sharpness.
-        grayscale = image.convert("L")
+        with Image.open(image_path) as image:
+            image.verify()
 
-        brightness = ImageStat.Stat(grayscale).mean[0]
+        # ---------------------------------------------------------
+        # 2. Load image using OpenCV
+        # ---------------------------------------------------------
 
-        # Edge-detected version of the image: sharp photos have strong,
-        # well-defined edges (high pixel variance); blurry ones don't.
-        edges = grayscale.filter(ImageFilter.FIND_EDGES)
-        sharpness = ImageStat.Stat(edges).stddev[0]
+        image = cv2.imread(image_path)
+
+        if image is None:
+
+            return {
+                "error":
+                    "OpenCV could not read the image.",
+                "source":
+                    "image_quality"
+            }
+
+        # ---------------------------------------------------------
+        # 3. Check image resolution
+        # ---------------------------------------------------------
+
+        height, width = image.shape[:2]
+
+        # ---------------------------------------------------------
+        # 4. Convert to grayscale
+        # ---------------------------------------------------------
+
+        grayscale = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2GRAY
+        )
+
+        # ---------------------------------------------------------
+        # 5. Calculate average brightness
+        # ---------------------------------------------------------
+
+        brightness = float(
+            grayscale.mean()
+        )
+
+        # ---------------------------------------------------------
+        # 6. Calculate sharpness
+        # ---------------------------------------------------------
+        #
+        # Laplacian variance is commonly used as a simple
+        # focus/blur indicator.
+        #
+        # Sharp image:
+        #     stronger fine edges
+        #     higher variance
+        #
+        # Blurry image:
+        #     smoother edges
+        #     lower variance
+        #
+
+        laplacian = cv2.Laplacian(
+            grayscale,
+            cv2.CV_64F
+        )
+
+        sharpness = float(
+            laplacian.var()
+        )
+
+        # ---------------------------------------------------------
+        # 7. Evaluate quality issues
+        # ---------------------------------------------------------
 
         issues = []
 
-        if width < MIN_WIDTH or height < MIN_HEIGHT:
+        # Resolution check
+        if (
+            width < MIN_WIDTH
+            or height < MIN_HEIGHT
+        ):
+
             issues.append(
-                f"Image resolution too low ({width}x{height}); "
-                f"minimum required is {MIN_WIDTH}x{MIN_HEIGHT}."
+                f"Image resolution too low "
+                f"({width}x{height}); "
+                f"minimum required is "
+                f"{MIN_WIDTH}x{MIN_HEIGHT}."
             )
 
+        # Brightness check
         if brightness < MIN_BRIGHTNESS:
-            issues.append("Image is too dark to reliably read printed text.")
-        elif brightness > MAX_BRIGHTNESS:
-            issues.append("Image is too bright/washed-out to reliably read printed text.")
 
+            issues.append(
+                "Image is too dark to reliably "
+                "read printed text."
+            )
+
+        elif brightness > MAX_BRIGHTNESS:
+
+            issues.append(
+                "Image is too bright/washed-out "
+                "to reliably read printed text."
+            )
+
+        # Blur/sharpness check
         if sharpness < MIN_SHARPNESS:
-            issues.append("Image appears blurry; text edges are not sharp enough.")
+
+            issues.append(
+                "Image appears blurry; "
+                "text edges are not sharp enough."
+            )
+
+        # ---------------------------------------------------------
+        # 8. Return quality result
+        # ---------------------------------------------------------
 
         return {
-            "is_acceptable": len(issues) == 0,
-            "issues": issues,
+            "is_acceptable":
+                len(issues) == 0,
+
+            "issues":
+                issues,
+
             "metrics": {
-                "width": width,
-                "height": height,
-                "brightness": round(brightness, 2),
-                "sharpness": round(sharpness, 2)
+                "width":
+                    int(width),
+
+                "height":
+                    int(height),
+
+                "brightness":
+                    round(
+                        brightness,
+                        2
+                    ),
+
+                "sharpness":
+                    round(
+                        sharpness,
+                        2
+                    )
             },
-            "source": "image_quality"
+
+            "source":
+                "image_quality"
         }
 
     except Exception as e:
+
         return {
-            "error": str(e),
-            "source": "image_quality"
+            "error":
+                str(e),
+
+            "source":
+                "image_quality"
         }
 
 
-# Standalone test runner — same pattern as ocr.py / gemini_vision.py
+# -------------------------------------------------------------
+# Standalone test runner
+# -------------------------------------------------------------
+
 if __name__ == "__main__":
+
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python image_quality.py <path_to_image>")
+
+        print(
+            "Usage: "
+            "python image_quality.py "
+            "<path_to_image>"
+        )
+
     else:
-        result = check_image_quality(sys.argv[1])
+
+        result = check_image_quality(
+            sys.argv[1]
+        )
+
         print(result)

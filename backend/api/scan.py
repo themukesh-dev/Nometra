@@ -13,7 +13,6 @@ from fastapi import (
     FastAPI,
     File,
     Form,
-    HTTPException,
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +51,9 @@ from database.inspections import (
     get_all_inspections,
     get_inspection_by_id,
     update_inspector_review,
+)
+from ingestion.image_quality import (
+    check_image_quality,
 )
 
 
@@ -198,6 +200,255 @@ def _calculate_sha256(
 
 
 # --------------------------------------------------
+# Image Quality Endpoint
+# --------------------------------------------------
+
+@router.post(
+    "/image-quality"
+)
+async def image_quality_check(
+    image: UploadFile = File(...)
+):
+    """
+    Performs the pre-extraction image-quality check.
+
+    This endpoint is used by ImageQualityScreen.tsx.
+
+    Pipeline:
+
+        Uploaded Image
+              ↓
+        File Validation
+              ↓
+        Temporary File
+              ↓
+        OpenCV Image Quality
+              ↓
+        Quality Result
+              ↓
+        Temporary File Deleted
+
+    The image is NOT sent to Gemini or OCR here.
+
+    Returns:
+
+        {
+            "is_acceptable": true/false,
+            "issues": [...],
+            "metrics": {
+                "width": ...,
+                "height": ...,
+                "brightness": ...,
+                "sharpness": ...
+            },
+            "source": "image_quality"
+        }
+    """
+
+    temp_path = None
+
+    try:
+
+        # --------------------------------------------------
+        # 1. Validate upload
+        # --------------------------------------------------
+
+        if image is None or not image.filename:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "No image was provided."
+                    )
+                },
+            )
+
+        # --------------------------------------------------
+        # 2. Validate file extension
+        # --------------------------------------------------
+
+        if not _allowed_file(
+            image.filename
+        ):
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        f"Unsupported file type for "
+                        f"'{image.filename}'. "
+                        "Use jpg, jpeg, png, or webp."
+                    )
+                },
+            )
+
+        print("")
+        print(
+            "========== IMAGE QUALITY CHECK =========="
+        )
+
+        print(
+            "FILENAME:",
+            image.filename,
+        )
+
+        # --------------------------------------------------
+        # 3. Save temporary image
+        # --------------------------------------------------
+
+        file_extension = (
+            image.filename
+            .rsplit(
+                ".",
+                1,
+            )[1]
+            .lower()
+        )
+
+        temp_filename = (
+            f"quality_{uuid.uuid4()}.{file_extension}"
+        )
+
+        temp_path = os.path.join(
+            UPLOAD_FOLDER,
+            temp_filename,
+        )
+
+        image_bytes = await image.read()
+
+        if not image_bytes:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "The uploaded image is empty."
+                    )
+                },
+            )
+
+        with open(
+            temp_path,
+            "wb",
+        ) as output_file:
+
+            output_file.write(
+                image_bytes
+            )
+
+        # --------------------------------------------------
+        # 4. OpenCV image-quality analysis
+        # --------------------------------------------------
+
+        print(
+            "RUNNING OPENCV IMAGE QUALITY..."
+        )
+
+        quality_result = (
+            check_image_quality(
+                temp_path
+            )
+        )
+
+        # --------------------------------------------------
+        # 5. Handle processing error
+        # --------------------------------------------------
+
+        if "error" in quality_result:
+
+            print(
+                "IMAGE QUALITY ERROR:",
+                quality_result,
+            )
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Image quality analysis failed."
+                    ),
+                    "image_quality":
+                        quality_result,
+                },
+            )
+
+        # --------------------------------------------------
+        # 6. Log result
+        # --------------------------------------------------
+
+        print(
+            "IMAGE QUALITY RESULT:"
+        )
+
+        print(
+            json.dumps(
+                quality_result,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        print(
+            "=========================================="
+        )
+        print("")
+
+        # --------------------------------------------------
+        # 7. Return result to frontend
+        # --------------------------------------------------
+
+        return {
+            "image_quality":
+                quality_result
+        }
+
+    except Exception as e:
+
+        print(
+            "IMAGE QUALITY ENDPOINT ERROR:",
+            str(e),
+        )
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": (
+                    f"Image quality processing failed: "
+                    f"{str(e)}"
+                )
+            },
+        )
+
+    finally:
+
+        # --------------------------------------------------
+        # Always delete temporary image
+        # --------------------------------------------------
+
+        if (
+            temp_path
+            and os.path.exists(
+                temp_path
+            )
+        ):
+
+            try:
+
+                os.remove(
+                    temp_path
+                )
+
+            except OSError as cleanup_error:
+
+                print(
+                    "IMAGE QUALITY TEMP FILE "
+                    "CLEANUP ERROR:",
+                    cleanup_error,
+                )
+
+
+# --------------------------------------------------
 # Scan endpoint
 # --------------------------------------------------
 
@@ -205,15 +456,9 @@ def _calculate_sha256(
     "/scan"
 )
 async def scan_label(
-    images: list[UploadFile] = File(
-        ...
-    ),
-    image_sides: str = Form(
-        "[]"
-    ),
-    category: str = Form(
-        "Other"
-    ),
+    images: list[UploadFile] = File(...),
+    image_sides: str = Form("[]"),
+    category: str = Form("Other"),
 ):
     """
     Accepts one package image.
@@ -231,6 +476,8 @@ async def scan_label(
         Image Validation
               ↓
         SHA-256 + Timestamp
+              ↓
+        OpenCV Image Quality
               ↓
         Gemini Vision
               ↓
@@ -527,7 +774,68 @@ async def scan_label(
         combined_evidence_hash = image_hash
 
         # --------------------------------------------------
-        # 7. Gemini Vision
+        # 7. OpenCV image-quality check
+        # --------------------------------------------------
+
+        print(
+            "OPENCV IMAGE QUALITY:",
+            side,
+        )
+
+        image_quality = (
+            check_image_quality(
+                temp_path
+            )
+        )
+
+        print(
+            "IMAGE QUALITY RESULT:"
+        )
+
+        print(
+            json.dumps(
+                image_quality,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        # If OpenCV could not process the image,
+        # reject the scan before OCR/Gemini.
+        if "error" in image_quality:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Image quality analysis failed."
+                    ),
+                    "image_quality":
+                        image_quality,
+                },
+            )
+
+        # If the image does not meet the quality
+        # thresholds, reject it before extraction.
+        if not image_quality.get(
+            "is_acceptable",
+            False,
+        ):
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Image quality is not sufficient "
+                        "for reliable label extraction."
+                    ),
+                    "image_quality":
+                        image_quality,
+                },
+            )
+
+        # --------------------------------------------------
+        # 8. Gemini Vision
         # --------------------------------------------------
 
         print(
@@ -554,7 +862,7 @@ async def scan_label(
         )
 
         # --------------------------------------------------
-        # 8. OCR
+        # 9. OCR
         # --------------------------------------------------
 
         print(
@@ -569,7 +877,7 @@ async def scan_label(
         )
 
         # --------------------------------------------------
-        # 9. Evidence fusion
+        # 10. Evidence fusion
         # --------------------------------------------------
 
         print(
@@ -619,7 +927,7 @@ async def scan_label(
         )
 
         # --------------------------------------------------
-        # 10. Attach single-image metadata
+        # 11. Attach single-image metadata
         # --------------------------------------------------
 
         fused_evidence[
@@ -682,7 +990,7 @@ async def scan_label(
         }
 
         # --------------------------------------------------
-        # 11. Rule engine
+        # 12. Rule engine
         # --------------------------------------------------
 
         print("")
@@ -759,7 +1067,7 @@ async def scan_label(
         print("")
 
         # --------------------------------------------------
-        # 12. Save inspection
+        # 13. Save inspection
         # --------------------------------------------------
 
         print(
@@ -788,7 +1096,7 @@ async def scan_label(
         )
 
         # --------------------------------------------------
-        # 13. Complete response
+        # 14. Complete response
         # --------------------------------------------------
 
         response = {
@@ -820,6 +1128,9 @@ async def scan_label(
 
             "compliance_report":
                 compliance_report,
+
+            "image_quality":
+                image_quality,
 
             "evidence_integrity": {
                 "algorithm":
