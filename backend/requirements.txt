@@ -4,7 +4,8 @@ python-multipart
 google-genai
 python-dotenv==1.0.1
 Pillow==10.4.0
-pytesseract==0.3.13
 opencv-python-headless
+paddlepaddle==3.2.0
+paddleocr
 gunicorn
-reportlab
+reportlabyw

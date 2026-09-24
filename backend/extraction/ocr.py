@@ -1,42 +1,87 @@
 # backend/extraction/ocr.py
 
-import pytesseract
-from PIL import Image
+from paddleocr import PaddleOCR
 
 
 # ---------------------------------------------------------------------------
-# TESSERACT CONFIGURATION
+# PADDLEOCR CONFIGURATION
 # ---------------------------------------------------------------------------
 
-pytesseract.pytesseract.tesseract_cmd = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# Nometra receives reasonably controlled package-label photographs.
+# Document orientation classification, document unwarping, and text-line
+# orientation are disabled to reduce unnecessary processing time.
+#
+# The core OCR pipeline remains:
+#   image -> text detection -> text recognition -> raw text
+#
+ocr = PaddleOCR(
+    lang="en",
+     ocr_version="PP-OCRv4",
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,
 )
 
 
+# ---------------------------------------------------------------------------
+# OCR EXTRACTION
+# ---------------------------------------------------------------------------
+
 def extract_text_ocr(image_path: str) -> str:
     """
-    Takes a path to a label image, runs it through Tesseract OCR,
-    and returns the raw OCR text as a string.
+    Takes a path to a label image, runs PaddleOCR,
+    and returns the raw OCR text as a single string.
 
-    Tesseract does not interpret the meaning of the text. It simply
-    returns the text it can read from the image. The evidence-fusion
-    layer later uses this raw text as an independent cross-check
-    against Gemini Vision extraction.
+    PaddleOCR only extracts visible text from the image.
+    It does not interpret the legal meaning of the text.
+
+    The evidence-fusion layer uses this raw OCR text as
+    an independent cross-check against Gemini Vision extraction.
+
+    Returns:
+        str: Raw OCR text.
     """
 
     try:
-        image = Image.open(image_path)
+        result = ocr.predict(image_path)
 
-        # Run Tesseract and return its raw text directly.
-        raw_text = pytesseract.image_to_string(image)
+        extracted_lines = []
 
-        return raw_text.strip()
+        for res in result:
+            if isinstance(res, dict):
+                texts = res.get("rec_texts", [])
+
+                if texts:
+                    extracted_lines.extend(
+                        str(text).strip()
+                        for text in texts
+                        if str(text).strip()
+                    )
+
+            else:
+                try:
+                    result_data = res.json
+
+                    if callable(result_data):
+                        result_data = result_data()
+
+                    if isinstance(result_data, dict):
+                        texts = result_data.get("rec_texts", [])
+
+                        if texts:
+                            extracted_lines.extend(
+                                str(text).strip()
+                                for text in texts
+                                if str(text).strip()
+                            )
+
+                except Exception:
+                    continue
+
+        return "\n".join(extracted_lines).strip()
 
     except Exception as e:
-        # Keep the return type consistent with the function contract.
-        # The caller expects OCR text, so return an empty string when
-        # OCR fails rather than returning a dictionary.
-        print(f"Tesseract OCR error: {e}")
+        print(f"PaddleOCR error: {e}")
         return ""
 
 
