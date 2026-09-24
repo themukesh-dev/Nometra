@@ -8,4 +8,4 @@ opencv-python-headless
 paddlepaddle==3.2.0
 paddleocr
 gunicorn
-reportlabyw
+reportlab
