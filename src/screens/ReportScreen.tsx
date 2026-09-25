@@ -80,7 +80,7 @@ export default function ReportScreen() {
    * Export PDF
    *
    * Production backend:
-   * https://nometra.onrender.com/reports/<inspection_id>/pdf
+   * /api/reports/<inspection_id>/pdf
    *
    * IMPORTANT:
    * This intentionally uses the Render URL directly.
@@ -95,7 +95,7 @@ export default function ReportScreen() {
     }
 
     const pdfUrl =
-      `https://nometra.onrender.com/reports/${inspectionId}/pdf`;
+      `/api/reports/${inspectionId}/pdf`;
 
     console.log('PDF URL:', pdfUrl);
 
