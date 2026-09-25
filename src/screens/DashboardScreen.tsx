@@ -198,7 +198,7 @@ export default function DashboardScreen() {
           </p>
 
           <h2 className="font-display font-bold text-2xl text-slate-900">
-            Inspector
+            Rajesh Kumar
           </h2>
 
           <p className="text-sm text-slate-500 mt-0.5">
