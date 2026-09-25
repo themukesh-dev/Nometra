@@ -1,3 +1,4 @@
+
 import { Plus, ChevronRight, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import MobileShell from '../components/MobileShell';
@@ -11,15 +12,18 @@ type BackendInspection = {
   id: number;
   timestamp?: string;
   created_at?: string;
+  product_name?: string | null;
   overall_status?: ComplianceStatus;
   status?: ComplianceStatus;
   passed?: number;
   failed?: number;
+
   extracted_data?: {
     product_name?: string | null;
     manufacturer_name?: string | null;
     [key: string]: unknown;
   };
+
   compliance_report?: {
     overall_status?: ComplianceStatus;
     passed?: number;
@@ -66,14 +70,18 @@ function normalizeInspection(
 ): DashboardInspection {
   return {
     id: String(inspection.id),
+
     productName:
+      inspection.product_name ||
       inspection.extracted_data?.product_name ||
       inspection.extracted_data?.manufacturer_name ||
       'Unnamed Product',
+
     date: formatDate(
       inspection.timestamp ??
       inspection.created_at
     ),
+
     status: getStatus(inspection),
   };
 }
@@ -207,6 +215,7 @@ export default function DashboardScreen() {
             <p className="font-display font-bold text-2xl text-slate-900">
               {loading ? '—' : total}
             </p>
+
             <p className="text-xs text-slate-500 mt-0.5">
               Total Inspections
             </p>
@@ -216,6 +225,7 @@ export default function DashboardScreen() {
             <p className="font-display font-bold text-2xl text-emerald-700">
               {loading ? '—' : compliant}
             </p>
+
             <p className="text-xs text-slate-500 mt-0.5">
               Compliant
             </p>
@@ -225,6 +235,7 @@ export default function DashboardScreen() {
             <p className="font-display font-bold text-2xl text-red-700">
               {loading ? '—' : nonCompliant}
             </p>
+
             <p className="text-xs text-slate-500 mt-0.5">
               Non-Compliant
             </p>
@@ -234,6 +245,7 @@ export default function DashboardScreen() {
             <p className="font-display font-bold text-2xl text-amber-700">
               {loading ? '—' : review}
             </p>
+
             <p className="text-xs text-slate-500 mt-0.5">
               Review Required
             </p>
