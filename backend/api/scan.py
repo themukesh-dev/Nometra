@@ -199,6 +199,72 @@ def _calculate_sha256(
     return sha256.hexdigest()
 
 
+def _parse_image_sides(
+    image_sides: str,
+) -> list:
+    """
+    Parses the image_sides form field.
+
+    Normal frontend value:
+
+        ["FRONT"]
+
+    Some command-line clients or proxies may escape
+    the quotation marks and send:
+
+        [\"FRONT\"]
+
+    This helper accepts both representations while
+    keeping the API contract as a JSON array.
+    """
+
+    if image_sides is None:
+        raise ValueError(
+            "Invalid image_sides. Expected a JSON array."
+        )
+
+    value = str(
+        image_sides
+    ).strip()
+
+    if not value:
+        raise ValueError(
+            "Invalid image_sides. Expected a JSON array."
+        )
+
+    # First attempt: normal JSON.
+    try:
+        parsed = json.loads(value)
+
+        if isinstance(parsed, list):
+            return parsed
+
+    except json.JSONDecodeError:
+        pass
+
+    # Second attempt: JSON whose quotation marks
+    # were escaped by a shell/client.
+    try:
+        unescaped_value = value.replace(
+            '\\"',
+            '"',
+        )
+
+        parsed = json.loads(
+            unescaped_value
+        )
+
+        if isinstance(parsed, list):
+            return parsed
+
+    except json.JSONDecodeError:
+        pass
+
+    raise ValueError(
+        "Invalid image_sides. Expected a JSON array."
+    )
+
+
 # --------------------------------------------------
 # Image Quality Endpoint
 # --------------------------------------------------
@@ -214,35 +280,7 @@ async def image_quality_check(
 
     This endpoint is used by ImageQualityScreen.tsx.
 
-    Pipeline:
-
-        Uploaded Image
-              ↓
-        File Validation
-              ↓
-        Temporary File
-              ↓
-        OpenCV Image Quality
-              ↓
-        Quality Result
-              ↓
-        Temporary File Deleted
-
     The image is NOT sent to Gemini or OCR here.
-
-    Returns:
-
-        {
-            "is_acceptable": true/false,
-            "issues": [...],
-            "metrics": {
-                "width": ...,
-                "height": ...,
-                "brightness": ...,
-                "sharpness": ...
-            },
-            "source": "image_quality"
-        }
     """
 
     temp_path = None
@@ -481,7 +519,7 @@ async def scan_label(
               ↓
         Gemini Vision
               ↓
-        Tesseract OCR
+        PaddleOCR
               ↓
         Evidence Fusion
               ↓
@@ -556,19 +594,16 @@ async def scan_label(
 
         try:
 
-            parsed_sides = json.loads(
+            parsed_sides = _parse_image_sides(
                 image_sides
             )
 
-        except json.JSONDecodeError:
+        except ValueError as e:
 
             return JSONResponse(
                 status_code=400,
                 content={
-                    "error": (
-                        "Invalid image_sides. "
-                        "Expected a JSON array."
-                    )
+                    "error": str(e)
                 },
             )
 
@@ -717,6 +752,17 @@ async def scan_label(
             await image_file.read()
         )
 
+        if not image_bytes:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "The uploaded image is empty."
+                    )
+                },
+            )
+
         with open(
             temp_path,
             "wb",
@@ -862,11 +908,11 @@ async def scan_label(
         )
 
         # --------------------------------------------------
-        # 9. OCR
+        # 9. PaddleOCR
         # --------------------------------------------------
 
         print(
-            "TESSERACT OCR:",
+            "PADDLEOCR:",
             side,
         )
 
@@ -874,6 +920,11 @@ async def scan_label(
             extract_text_ocr(
                 temp_path
             )
+        )
+
+        print(
+            "PADDLEOCR RESULT AVAILABLE:",
+            bool(ocr_result),
         )
 
         # --------------------------------------------------
