@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://nometra.onrender.com/$1"
+      "destination": "https://nometra-1.onrender.com/$1"
     }
   ]
 }
