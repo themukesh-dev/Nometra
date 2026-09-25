@@ -17,9 +17,6 @@ DB_PATH = os.path.join(
 
 
 def _utc_timestamp() -> str:
-    """
-    Returns a timezone-aware UTC timestamp in ISO 8601 format.
-    """
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -28,29 +25,43 @@ def _utc_timestamp() -> str:
 # ============================================================
 
 def _get_connection():
-    """
-    Returns a database connection.
-
-    Production:
-        Uses PostgreSQL when DATABASE_URL is configured.
-
-    Local development:
-        Falls back to SQLite when DATABASE_URL is not configured.
-    """
-
     if DATABASE_URL:
         import psycopg2
-
         return psycopg2.connect(DATABASE_URL)
 
     return sqlite3.connect(DB_PATH)
 
 
 def _is_postgresql() -> bool:
-    """
-    Returns True when Nometra is connected to PostgreSQL.
-    """
     return bool(DATABASE_URL)
+
+
+# ============================================================
+# PRODUCT NAME EXTRACTION
+# ============================================================
+
+def _extract_product_name(extracted_data) -> str:
+    """
+    Extract product name from extracted/fused evidence.
+    """
+
+    if not isinstance(extracted_data, dict):
+        return ""
+
+    product_name = extracted_data.get("product_name")
+
+    if isinstance(product_name, dict):
+        value = product_name.get("value")
+
+        if value is not None and str(value).strip():
+            return str(value).strip()
+
+        return ""
+
+    if product_name is not None and str(product_name).strip():
+        return str(product_name).strip()
+
+    return ""
 
 
 # ============================================================
@@ -58,14 +69,6 @@ def _is_postgresql() -> bool:
 # ============================================================
 
 def init_db():
-    """
-    Creates the inspections table if it does not already exist.
-
-    PostgreSQL is used in production when DATABASE_URL exists.
-
-    SQLite remains available as a local-development fallback.
-    """
-
     conn = _get_connection()
     cursor = conn.cursor()
 
@@ -85,8 +88,24 @@ def init_db():
                 inspector_decisions TEXT,
                 inspector_notes TEXT,
                 inspector_remarks TEXT,
-                final_status TEXT
+                final_status TEXT,
+                gemini_product_name TEXT,
+                product_name TEXT
             )
+        """)
+
+        # ----------------------------------------------------
+        # Migrations for existing PostgreSQL database
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            ALTER TABLE inspections
+            ADD COLUMN IF NOT EXISTS gemini_product_name TEXT
+        """)
+
+        cursor.execute("""
+            ALTER TABLE inspections
+            ADD COLUMN IF NOT EXISTS product_name TEXT
         """)
 
     else:
@@ -105,15 +124,15 @@ def init_db():
                 inspector_decisions TEXT,
                 inspector_notes TEXT,
                 inspector_remarks TEXT,
-                final_status TEXT
+                final_status TEXT,
+                gemini_product_name TEXT,
+                product_name TEXT
             )
         """)
 
-        # --------------------------------------------------
-        # SQLite migrations for older local databases
-        # --------------------------------------------------
-
-        cursor.execute("PRAGMA table_info(inspections)")
+        cursor.execute(
+            "PRAGMA table_info(inspections)"
+        )
 
         existing_columns = {
             row[1]
@@ -145,6 +164,14 @@ def init_db():
                 ALTER TABLE inspections
                 ADD COLUMN final_status TEXT
             """,
+            "gemini_product_name": """
+                ALTER TABLE inspections
+                ADD COLUMN gemini_product_name TEXT
+            """,
+            "product_name": """
+                ALTER TABLE inspections
+                ADD COLUMN product_name TEXT
+            """,
         }
 
         for column_name, sql in migrations.items():
@@ -170,15 +197,42 @@ def save_inspection(
     inspector_notes: dict | None = None,
     inspector_remarks: str | None = None,
     final_status: str | None = None,
+    gemini_product_name: str | None = None,
+    product_name: str | None = None,
 ) -> int:
-    """
-    Saves one scan result to the database.
-
-    Returns the new inspection ID.
-    """
 
     if evidence_timestamp is None:
         evidence_timestamp = _utc_timestamp()
+
+    # --------------------------------------------------------
+    # Determine Gemini's original product name
+    # --------------------------------------------------------
+
+    if not gemini_product_name:
+        gemini_product_name = _extract_product_name(
+            extracted_data
+        )
+
+    if gemini_product_name:
+        gemini_product_name = str(
+            gemini_product_name
+        ).strip()
+
+    # --------------------------------------------------------
+    # Initial final product name
+    #
+    # At scan time the inspector has not edited anything yet,
+    # so the final name starts as Gemini's suggestion.
+    # --------------------------------------------------------
+
+    if not product_name:
+        product_name = gemini_product_name
+
+    if product_name:
+        product_name = str(product_name).strip()
+
+    if not product_name:
+        product_name = "Unnamed Product"
 
     conn = _get_connection()
     cursor = conn.cursor()
@@ -198,11 +252,13 @@ def save_inspection(
                 inspector_decisions,
                 inspector_notes,
                 inspector_remarks,
-                final_status
+                final_status,
+                gemini_product_name,
+                product_name
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
         """, (
@@ -214,10 +270,16 @@ def save_inspection(
             json.dumps(compliance_report),
             evidence_hash,
             evidence_timestamp,
-            json.dumps(inspector_decisions or {}),
-            json.dumps(inspector_notes or {}),
+            json.dumps(
+                inspector_decisions or {}
+            ),
+            json.dumps(
+                inspector_notes or {}
+            ),
             inspector_remarks or "",
             final_status,
+            gemini_product_name,
+            product_name,
         ))
 
         new_id = cursor.fetchone()[0]
@@ -237,9 +299,13 @@ def save_inspection(
                 inspector_decisions,
                 inspector_notes,
                 inspector_remarks,
-                final_status
+                final_status,
+                gemini_product_name,
+                product_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
         """, (
             _utc_timestamp(),
             compliance_report["overall_status"],
@@ -249,10 +315,16 @@ def save_inspection(
             json.dumps(compliance_report),
             evidence_hash,
             evidence_timestamp,
-            json.dumps(inspector_decisions or {}),
-            json.dumps(inspector_notes or {}),
+            json.dumps(
+                inspector_decisions or {}
+            ),
+            json.dumps(
+                inspector_notes or {}
+            ),
             inspector_remarks or "",
             final_status,
+            gemini_product_name,
+            product_name,
         ))
 
         new_id = cursor.lastrowid
@@ -274,13 +346,19 @@ def update_inspector_review(
     inspector_notes: dict | None = None,
     inspector_remarks: str | None = None,
     final_status: str | None = None,
+    product_name: str | None = None,
 ) -> bool:
-    """
-    Persists inspector review information.
-    """
 
     conn = _get_connection()
     cursor = conn.cursor()
+
+    if product_name is not None:
+        product_name = str(
+            product_name
+        ).strip()
+
+        if not product_name:
+            product_name = None
 
     if _is_postgresql():
 
@@ -290,13 +368,22 @@ def update_inspector_review(
                 inspector_decisions = %s,
                 inspector_notes = %s,
                 inspector_remarks = %s,
-                final_status = %s
+                final_status = %s,
+                product_name = COALESCE(
+                    %s,
+                    product_name
+                )
             WHERE id = %s
         """, (
-            json.dumps(inspector_decisions or {}),
-            json.dumps(inspector_notes or {}),
+            json.dumps(
+                inspector_decisions or {}
+            ),
+            json.dumps(
+                inspector_notes or {}
+            ),
             inspector_remarks or "",
             final_status,
+            product_name,
             inspection_id,
         ))
 
@@ -308,13 +395,22 @@ def update_inspector_review(
                 inspector_decisions = ?,
                 inspector_notes = ?,
                 inspector_remarks = ?,
-                final_status = ?
+                final_status = ?,
+                product_name = COALESCE(
+                    ?,
+                    product_name
+                )
             WHERE id = ?
         """, (
-            json.dumps(inspector_decisions or {}),
-            json.dumps(inspector_notes or {}),
+            json.dumps(
+                inspector_decisions or {}
+            ),
+            json.dumps(
+                inspector_notes or {}
+            ),
             inspector_remarks or "",
             final_status,
+            product_name,
             inspection_id,
         ))
 
@@ -328,54 +424,10 @@ def update_inspector_review(
 
 
 # ============================================================
-# PRODUCT NAME EXTRACTION
-# ============================================================
-
-def _extract_product_name(extracted_data) -> str:
-    """
-    Extracts the product name from the stored evidence structure.
-    """
-
-    if not isinstance(extracted_data, dict):
-        return ""
-
-    product_name = extracted_data.get(
-        "product_name"
-    )
-
-    # Current evidence structure
-    if isinstance(product_name, dict):
-
-        value = product_name.get(
-            "value"
-        )
-
-        if (
-            value is not None
-            and str(value).strip()
-        ):
-            return str(value).strip()
-
-        return ""
-
-    # Older/simple structure
-    if (
-        product_name is not None
-        and str(product_name).strip()
-    ):
-        return str(product_name).strip()
-
-    return ""
-
-
-# ============================================================
 # GET ALL INSPECTIONS
 # ============================================================
 
 def get_all_inspections() -> list:
-    """
-    Returns a summary list of all past inspections.
-    """
 
     conn = _get_connection()
 
@@ -399,6 +451,8 @@ def get_all_inspections() -> list:
             overall_status,
             passed,
             failed,
+            gemini_product_name,
+            product_name,
             extracted_data,
             evidence_hash,
             evidence_timestamp,
@@ -422,27 +476,74 @@ def get_all_inspections() -> list:
         result = dict(row)
 
         # --------------------------------------------------
-        # Extract product name
+        # Gemini original product name
         # --------------------------------------------------
 
-        try:
+        gemini_product_name = (
+            result.get(
+                "gemini_product_name"
+            )
+            or ""
+        )
 
-            extracted_data = json.loads(
-                result.get(
-                    "extracted_data",
-                    "{}",
-                )
+        if isinstance(
+            gemini_product_name,
+            str
+        ):
+            gemini_product_name = (
+                gemini_product_name.strip()
             )
 
-        except (
-            json.JSONDecodeError,
-            TypeError,
+        # --------------------------------------------------
+        # Final product name
+        # --------------------------------------------------
+
+        product_name = (
+            result.get("product_name")
+            or ""
+        )
+
+        if isinstance(
+            product_name,
+            str
         ):
+            product_name = product_name.strip()
 
-            extracted_data = {}
+        # --------------------------------------------------
+        # Fallback for older records
+        # --------------------------------------------------
 
-        product_name = _extract_product_name(
-            extracted_data
+        if not gemini_product_name or not product_name:
+
+            try:
+                extracted_data = json.loads(
+                    result.get(
+                        "extracted_data",
+                        "{}",
+                    )
+                )
+
+            except (
+                json.JSONDecodeError,
+                TypeError,
+            ):
+
+                extracted_data = {}
+
+            extracted_name = _extract_product_name(
+                extracted_data
+            )
+
+            if not gemini_product_name:
+                gemini_product_name = extracted_name
+
+            if not product_name:
+                product_name = extracted_name
+
+        result["gemini_product_name"] = (
+            gemini_product_name
+            if gemini_product_name
+            else "Unnamed Product"
         )
 
         result["product_name"] = (
@@ -452,8 +553,7 @@ def get_all_inspections() -> list:
         )
 
         # --------------------------------------------------
-        # Full extracted_data is not returned
-        # in inspection history.
+        # Remove large extracted_data from history response
         # --------------------------------------------------
 
         result.pop(
@@ -462,7 +562,7 @@ def get_all_inspections() -> list:
         )
 
         # --------------------------------------------------
-        # Inspector review data
+        # Parse inspector JSON
         # --------------------------------------------------
 
         result["inspector_decisions"] = (
@@ -490,10 +590,9 @@ def get_all_inspections() -> list:
 # GET SINGLE INSPECTION
 # ============================================================
 
-def get_inspection_by_id(inspection_id: int):
-    """
-    Returns the full details for one inspection.
-    """
+def get_inspection_by_id(
+    inspection_id: int,
+):
 
     conn = _get_connection()
 
@@ -538,13 +637,29 @@ def get_inspection_by_id(inspection_id: int):
 
     result = dict(row)
 
-    result["extracted_data"] = json.loads(
-        result["extracted_data"]
-    )
+    # --------------------------------------------------------
+    # Parse stored JSON
+    # --------------------------------------------------------
 
-    result["compliance_report"] = json.loads(
-        result["compliance_report"]
-    )
+    try:
+        result["extracted_data"] = json.loads(
+            result["extracted_data"]
+        )
+    except (
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        result["extracted_data"] = {}
+
+    try:
+        result["compliance_report"] = json.loads(
+            result["compliance_report"]
+        )
+    except (
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        result["compliance_report"] = {}
 
     result["inspector_decisions"] = (
         json.loads(
@@ -560,6 +675,66 @@ def get_inspection_by_id(inspection_id: int):
         )
         if result.get("inspector_notes")
         else {}
+    )
+
+    # --------------------------------------------------------
+    # Gemini original product name
+    # --------------------------------------------------------
+
+    gemini_product_name = (
+        result.get(
+            "gemini_product_name"
+        )
+        or ""
+    )
+
+    if isinstance(
+        gemini_product_name,
+        str
+    ):
+        gemini_product_name = (
+            gemini_product_name.strip()
+        )
+
+    # --------------------------------------------------------
+    # Final product name
+    # --------------------------------------------------------
+
+    product_name = (
+        result.get("product_name")
+        or ""
+    )
+
+    if isinstance(
+        product_name,
+        str
+    ):
+        product_name = product_name.strip()
+
+    # --------------------------------------------------------
+    # Fallback for older records
+    # --------------------------------------------------------
+
+    extracted_name = _extract_product_name(
+        result["extracted_data"]
+    )
+
+    if not gemini_product_name:
+        gemini_product_name = extracted_name
+
+    if not product_name:
+        product_name = extracted_name
+
+    result["gemini_product_name"] = (
+        gemini_product_name
+        if gemini_product_name
+        else "Unnamed Product"
+    )
+
+    result["product_name"] = (
+        product_name
+        if product_name
+        else "Unnamed Product"
     )
 
     return result
@@ -619,6 +794,8 @@ if __name__ == "__main__":
         },
         inspector_remarks="Test inspector review.",
         final_status="COMPLIANT",
+        gemini_product_name="TEST PRODUCT",
+        product_name="TEST PRODUCT",
     )
 
     print(

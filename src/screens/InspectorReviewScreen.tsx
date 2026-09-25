@@ -54,6 +54,31 @@ const DECISION_OPTIONS: {
   },
 ];
 
+function getSuggestedProductName(
+  backendResult: any
+): string {
+  const productName =
+    backendResult?.extracted_data?.product_name;
+
+  if (
+    typeof productName === 'object' &&
+    productName !== null &&
+    productName.value
+  ) {
+    return String(productName.value);
+  }
+
+  if (
+    productName !== undefined &&
+    productName !== null &&
+    String(productName).trim()
+  ) {
+    return String(productName);
+  }
+
+  return '';
+}
+
 function FindingIcon({
   status,
 }: {
@@ -102,20 +127,39 @@ export default function InspectorReviewScreen() {
     useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
+
+  const [saveError, setSaveError] =
+    useState('');
+
+  // --------------------------------------------------
+  // Gemini suggested product name
+  // --------------------------------------------------
+
+  const [productName, setProductName] =
+    useState(() =>
+      getSuggestedProductName(
+        backendResult
+      )
+    );
 
   const findings =
     currentInspection?.findings ?? [];
 
-  const reviewFindings = findings.filter(
-    f => f.status !== 'COMPLIANT'
-  );
+  const reviewFindings =
+    findings.filter(
+      f => f.status !== 'COMPLIANT'
+    );
 
   const reqs =
-    currentInspection?.applicableRequirements ?? [];
+    currentInspection?.applicableRequirements ??
+    [];
 
-  const getReqName = (reqId: string) =>
-    reqs.find(r => r.id === reqId)?.name ?? reqId;
+  const getReqName = (
+    reqId: string
+  ) =>
+    reqs.find(
+      r => r.id === reqId
+    )?.name ?? reqId;
 
   const allReviewed =
     reviewFindings.every(
@@ -123,119 +167,141 @@ export default function InspectorReviewScreen() {
     );
 
   // --------------------------------------------------
-  // Determine final inspection status
-  // --------------------------------------------------
-  //
-  // CONFIRM          -> finding becomes compliant
-  // REJECT           -> finding remains non-compliant
-  // MODIFY           -> requires further verification
-  // REQUEST_EVIDENCE -> requires further evidence
-  //
-  // This status is stored separately from the original
-  // automated system assessment.
+  // Final inspection status
   // --------------------------------------------------
 
-  const calculateFinalStatus = (): string => {
-    if (reviewFindings.length === 0) {
-      return 'COMPLIANT';
-    }
+  const calculateFinalStatus =
+    (): string => {
+      if (
+        reviewFindings.length === 0
+      ) {
+        return 'COMPLIANT';
+      }
 
-    let hasRejected = false;
-    let requiresVerification = false;
+      let hasRejected = false;
+      let requiresVerification = false;
 
-    for (const finding of reviewFindings) {
-      const decision =
-        inspectorDecisions[finding.id];
+      for (
+        const finding of reviewFindings
+      ) {
+        const decision =
+          inspectorDecisions[
+            finding.id
+          ];
 
-      if (decision === 'REJECT') {
-        hasRejected = true;
+        if (
+          decision === 'REJECT'
+        ) {
+          hasRejected = true;
+        }
+
+        if (
+          decision === 'MODIFY' ||
+          decision ===
+            'REQUEST_EVIDENCE'
+        ) {
+          requiresVerification = true;
+        }
+      }
+
+      if (hasRejected) {
+        return 'NON_COMPLIANT';
       }
 
       if (
-        decision === 'MODIFY' ||
-        decision === 'REQUEST_EVIDENCE'
+        requiresVerification
       ) {
-        requiresVerification = true;
+        return 'VERIFICATION_REQUIRED';
       }
-    }
 
-    if (hasRejected) {
-      return 'NON_COMPLIANT';
-    }
-
-    if (requiresVerification) {
-      return 'VERIFICATION_REQUIRED';
-    }
-
-    return 'COMPLIANT';
-  };
+      return 'COMPLIANT';
+    };
 
   // --------------------------------------------------
   // Save inspector review
   // --------------------------------------------------
 
-  const handleGenerateReport = async () => {
-    if (!backendResult?.inspection_id) {
-      setSaveError(
-        'Inspection ID is unavailable. Please return to the compliance result and try again.'
-      );
-      return;
-    }
-
-    if (!allReviewed) {
-      setSaveError(
-        'Please review all findings before generating the inspection report.'
-      );
-      return;
-    }
-
-    setSaving(true);
-    setSaveError('');
-
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:5000/inspections/${backendResult.inspection_id}/review`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            inspector_decisions:
-              inspectorDecisions,
-
-            inspector_notes:
-              inspectorNotes,
-
-            inspector_remarks:
-              remarksText,
-
-            final_status:
-              calculateFinalStatus(),
-          }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            'Failed to save inspector review.'
+  const handleGenerateReport =
+    async () => {
+      if (
+        !backendResult?.inspection_id
+      ) {
+        setSaveError(
+          'Inspection ID is unavailable. Please return to the compliance result and try again.'
         );
+        return;
       }
 
-      navigate('report');
-    } catch (error) {
-      setSaveError(
-        error instanceof Error
-          ? error.message
-          : 'Failed to save inspector review.'
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
+      if (!allReviewed) {
+        setSaveError(
+          'Please review all findings before generating the inspection report.'
+        );
+        return;
+      }
+
+      const finalProductName =
+        productName.trim();
+
+      if (!finalProductName) {
+        setSaveError(
+          'Please enter a product name before generating the report.'
+        );
+        return;
+      }
+
+      setSaving(true);
+      setSaveError('');
+
+      try {
+        const response =
+          await fetch(
+            `/api/inspections/${backendResult.inspection_id}/review`,
+            {
+              method: 'PUT',
+              headers: {
+                'Content-Type':
+                  'application/json',
+              },
+              body: JSON.stringify({
+                product_name:
+                  finalProductName,
+
+                inspector_decisions:
+                  inspectorDecisions,
+
+                inspector_notes:
+                  inspectorNotes,
+
+                inspector_remarks:
+                  remarksText,
+
+                final_status:
+                  calculateFinalStatus(),
+              }),
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data?.error ||
+              'Failed to save inspector review.'
+          );
+        }
+
+        navigate('report');
+      } catch (error) {
+        setSaveError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to save inspector review.'
+        );
+      } finally {
+        setSaving(false);
+      }
+    };
 
   return (
     <MobileShell
@@ -243,163 +309,225 @@ export default function InspectorReviewScreen() {
       backScreen="compliance-result"
     >
       <div className="px-4 pb-6 pt-4">
+
         <p className="text-sm text-slate-500 mb-4">
-          Review system assessments and make the final
-          determination for each finding. Your decision
-          overrides the system assessment.
+          Review the system assessment, correct the
+          product name if required, and make the final
+          inspection determination.
         </p>
 
-        {/* Review findings */}
+        {/* ------------------------------------------------
+            PRODUCT NAME
+        ------------------------------------------------ */}
+
+        <div className="bg-white border border-slate-200 rounded-xl p-4 mb-5">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+            Product Name
+          </p>
+
+          <input
+            type="text"
+            value={productName}
+            onChange={e =>
+              setProductName(
+                e.target.value
+              )
+            }
+            placeholder="Enter product name"
+            className="w-full text-sm text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+          />
+
+          <p className="text-[11px] text-slate-400 mt-2">
+            Gemini suggested this name. The inspector
+            can edit it before generating the report.
+          </p>
+        </div>
+
+        {/* ------------------------------------------------
+            FINDINGS TO REVIEW
+        ------------------------------------------------ */}
+
         {reviewFindings.length > 0 && (
           <div className="mb-5">
+
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
               Findings to Review
             </p>
 
             <div className="flex flex-col gap-3">
-              {reviewFindings.map(finding => {
-                const isExpanded =
-                  expandedId === finding.id;
 
-                const decision =
-                  inspectorDecisions[finding.id];
+              {reviewFindings.map(
+                finding => {
+                  const isExpanded =
+                    expandedId ===
+                    finding.id;
 
-                const note =
-                  inspectorNotes[finding.id] ?? '';
+                  const decision =
+                    inspectorDecisions[
+                      finding.id
+                    ];
 
-                return (
-                  <div
-                    key={finding.id}
-                    className="bg-white border border-slate-200 rounded-xl overflow-hidden"
-                  >
-                    <button
-                      className="w-full px-4 py-3.5 flex items-start gap-2.5 text-left"
-                      onClick={() =>
-                        setExpandedId(
-                          isExpanded
-                            ? null
-                            : finding.id
-                        )
-                      }
+                  const note =
+                    inspectorNotes[
+                      finding.id
+                    ] ?? '';
+
+                  return (
+                    <div
+                      key={finding.id}
+                      className="bg-white border border-slate-200 rounded-xl overflow-hidden"
                     >
-                      <FindingIcon
-                        status={finding.status}
-                      />
 
-                      <div className="flex-1 min-w-0">
-                        <p className="font-display font-semibold text-sm text-slate-900">
-                          {getReqName(
-                            finding.requirementId
-                          )}
-                        </p>
+                      <button
+                        className="w-full px-4 py-3.5 flex items-start gap-2.5 text-left"
+                        onClick={() =>
+                          setExpandedId(
+                            isExpanded
+                              ? null
+                              : finding.id
+                          )
+                        }
+                      >
+                        <FindingIcon
+                          status={
+                            finding.status
+                          }
+                        />
 
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-xs text-slate-500">
-                            System:{' '}
-                          </span>
+                        <div className="flex-1 min-w-0">
 
-                          <StatusBadge
-                            status={finding.status}
-                            size="sm"
-                          />
-                        </div>
-
-                        {decision && (
-                          <p className="text-xs font-semibold text-blue-700 mt-1">
-                            ✓ Your decision:{' '}
-                            {decision.replace(
-                              '_',
-                              ' '
+                          <p className="font-display font-semibold text-sm text-slate-900">
+                            {getReqName(
+                              finding.requirementId
                             )}
                           </p>
-                        )}
-                      </div>
 
-                      <RotateCcw
-                        size={14}
-                        className={`text-slate-300 shrink-0 mt-1 transition-transform ${
-                          isExpanded
-                            ? 'rotate-180'
-                            : ''
-                        }`}
-                      />
-                    </button>
+                          <div className="flex items-center gap-2 mt-0.5">
 
-                    {isExpanded && (
-                      <div className="border-t border-slate-100 px-4 py-3 bg-slate-50">
-                        <p className="text-xs text-slate-600 mb-3">
-                          {finding.explanation}
-                        </p>
+                            <span className="text-xs text-slate-500">
+                              System:
+                            </span>
 
-                        {/* Decision buttons */}
-                        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                          Your Decision
-                        </p>
+                            <StatusBadge
+                              status={
+                                finding.status
+                              }
+                              size="sm"
+                            />
 
-                        <div className="grid grid-cols-2 gap-2 mb-3">
-                          {DECISION_OPTIONS.map(
-                            opt => {
-                              const Icon = opt.icon;
+                          </div>
 
-                              const isSelected =
-                                decision ===
-                                opt.value;
-
-                              return (
-                                <button
-                                  key={
-                                    opt.value
-                                  }
-                                  onClick={() =>
-                                    setInspectorDecision(
-                                      finding.id,
-                                      opt.value
-                                    )
-                                  }
-                                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-all ${
-                                    isSelected
-                                      ? opt.color +
-                                        ' ring-2 ring-offset-1 ring-current'
-                                      : 'border-slate-200 bg-white text-slate-600'
-                                  }`}
-                                >
-                                  <Icon size={13} />
-
-                                  {opt.label}
-                                </button>
-                              );
-                            }
+                          {decision && (
+                            <p className="text-xs font-semibold text-blue-700 mt-1">
+                              ✓ Your decision:{' '}
+                              {decision.replace(
+                                '_',
+                                ' '
+                              )}
+                            </p>
                           )}
+
                         </div>
 
-                        {/* Notes */}
-                        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                          Inspector Note
-                        </p>
-
-                        <textarea
-                          value={note}
-                          onChange={e =>
-                            setInspectorNote(
-                              finding.id,
-                              e.target.value
-                            )
-                          }
-                          placeholder="Add observation or notes…"
-                          className="w-full text-sm text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-2 min-h-[64px] resize-none focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        <RotateCcw
+                          size={14}
+                          className={`text-slate-300 shrink-0 mt-1 transition-transform ${
+                            isExpanded
+                              ? 'rotate-180'
+                              : ''
+                          }`}
                         />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-slate-100 px-4 py-3 bg-slate-50">
+
+                          <p className="text-xs text-slate-600 mb-3">
+                            {
+                              finding.explanation
+                            }
+                          </p>
+
+                          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                            Your Decision
+                          </p>
+
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+
+                            {DECISION_OPTIONS.map(
+                              opt => {
+                                const Icon =
+                                  opt.icon;
+
+                                const isSelected =
+                                  decision ===
+                                  opt.value;
+
+                                return (
+                                  <button
+                                    key={
+                                      opt.value
+                                    }
+                                    onClick={() =>
+                                      setInspectorDecision(
+                                        finding.id,
+                                        opt.value
+                                      )
+                                    }
+                                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-all ${
+                                      isSelected
+                                        ? opt.color +
+                                          ' ring-2 ring-offset-1 ring-current'
+                                        : 'border-slate-200 bg-white text-slate-600'
+                                    }`}
+                                  >
+                                    <Icon size={13} />
+
+                                    {
+                                      opt.label
+                                    }
+                                  </button>
+                                );
+                              }
+                            )}
+
+                          </div>
+
+                          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                            Inspector Note
+                          </p>
+
+                          <textarea
+                            value={note}
+                            onChange={e =>
+                              setInspectorNote(
+                                finding.id,
+                                e.target.value
+                              )
+                            }
+                            placeholder="Add observation or notes..."
+                            className="w-full text-sm text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-2 min-h-[64px] resize-none outline-none focus:ring-2 focus:ring-blue-600"
+                          />
+
+                        </div>
+                      )}
+
+                    </div>
+                  );
+                }
+              )}
+
             </div>
           </div>
         )}
 
-        {/* All compliant notice */}
+        {/* ------------------------------------------------
+            ALL COMPLIANT
+        ------------------------------------------------ */}
+
         {reviewFindings.length === 0 && (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-4 mb-5 text-center">
+
             <CheckCircle2
               size={24}
               className="text-emerald-600 mx-auto mb-1"
@@ -412,11 +540,16 @@ export default function InspectorReviewScreen() {
             <p className="text-xs text-emerald-700 mt-0.5">
               No additional inspector review required.
             </p>
+
           </div>
         )}
 
-        {/* Final remarks */}
+        {/* ------------------------------------------------
+            FINAL REMARKS
+        ------------------------------------------------ */}
+
         <div className="mb-5">
+
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
             Inspector Remarks
           </p>
@@ -424,31 +557,44 @@ export default function InspectorReviewScreen() {
           <textarea
             value={remarksText}
             onChange={e =>
-              setRemarksText(e.target.value)
+              setRemarksText(
+                e.target.value
+              )
             }
-            placeholder="Overall inspection remarks, observations, or instructions to the establishment…"
-            className="w-full text-sm text-slate-800 bg-white border border-slate-200 rounded-xl px-4 py-3 min-h-[80px] resize-none focus:outline-none focus:ring-2 focus:ring-blue-600"
+            placeholder="Overall inspection remarks, observations, or instructions to the establishment..."
+            className="w-full text-sm text-slate-800 bg-white border border-slate-200 rounded-xl px-4 py-3 min-h-[80px] resize-none outline-none focus:ring-2 focus:ring-blue-600"
           />
+
         </div>
 
-        {/* Final decision summary */}
+        {/* ------------------------------------------------
+            REVIEW COMPLETE
+        ------------------------------------------------ */}
+
         {allReviewed &&
           reviewFindings.length > 0 && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3.5 mb-5">
+
               <p className="font-display font-semibold text-blue-900 text-sm">
                 Review complete
               </p>
 
               <p className="text-blue-700 text-xs mt-0.5">
-                All findings reviewed. Proceed to
-                generate the official inspection report.
+                All findings reviewed. The edited product
+                name and inspector decisions will be stored
+                with this inspection.
               </p>
+
             </div>
           )}
 
-        {/* Save error */}
+        {/* ------------------------------------------------
+            ERROR
+        ------------------------------------------------ */}
+
         {saveError && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4">
+
             <p className="text-sm font-semibold text-red-800">
               Unable to generate report
             </p>
@@ -456,22 +602,36 @@ export default function InspectorReviewScreen() {
             <p className="text-xs text-red-700 mt-1">
               {saveError}
             </p>
+
           </div>
         )}
 
+        {/* ------------------------------------------------
+            GENERATE REPORT
+        ------------------------------------------------ */}
+
         <button
-          onClick={handleGenerateReport}
-          disabled={saving || !allReviewed}
+          onClick={
+            handleGenerateReport
+          }
+          disabled={
+            saving ||
+            !allReviewed ||
+            !productName.trim()
+          }
           className={`w-full h-12 text-white font-display font-semibold rounded-xl transition-all ${
-            saving || !allReviewed
+            saving ||
+            !allReviewed ||
+            !productName.trim()
               ? 'bg-slate-400 cursor-not-allowed'
               : 'bg-blue-700 hover:bg-blue-800 active:scale-[0.98]'
           }`}
         >
           {saving
-            ? 'Saving Inspector Review…'
+            ? 'Saving Inspector Review...'
             : 'Generate Inspection Report →'}
         </button>
+
       </div>
     </MobileShell>
   );

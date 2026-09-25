@@ -12,9 +12,13 @@ type BackendInspection = {
   id: number;
   timestamp?: string;
   created_at?: string;
+
+  // Final product name after inspector review
   product_name?: string | null;
-  overall_status?: ComplianceStatus;
-  status?: ComplianceStatus;
+
+  overall_status?: ComplianceStatus | string;
+  status?: ComplianceStatus | string;
+
   passed?: number;
   failed?: number;
 
@@ -25,7 +29,7 @@ type BackendInspection = {
   };
 
   compliance_report?: {
-    overall_status?: ComplianceStatus;
+    overall_status?: ComplianceStatus | string;
     passed?: number;
     failed?: number;
   };
@@ -41,12 +45,13 @@ type DashboardInspection = {
 function getStatus(
   inspection: BackendInspection
 ): ComplianceStatus {
-  return (
+  const status =
     inspection.overall_status ??
     inspection.status ??
     inspection.compliance_report?.overall_status ??
-    'VERIFICATION_REQUIRED'
-  );
+    'VERIFICATION_REQUIRED';
+
+  return status as ComplianceStatus;
 }
 
 function formatDate(value?: string) {
@@ -71,6 +76,8 @@ function normalizeInspection(
   return {
     id: String(inspection.id),
 
+    // Prefer final inspector-confirmed name.
+    // Fall back to the extracted Gemini name for older records.
     productName:
       inspection.product_name ||
       inspection.extracted_data?.product_name ||

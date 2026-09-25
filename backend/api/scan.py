@@ -20,6 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 
+# ============================================================
+# PATH CONFIGURATION
+# ============================================================
+
 # Allows this file to find sibling top-level folders
 # (extraction/, engine/, classification/, etc.)
 sys.path.append(
@@ -31,21 +35,30 @@ sys.path.append(
 )
 
 
+# ============================================================
+# IMPORTS
+# ============================================================
+
 from extraction.gemini_vision import (
     extract_label_data,
 )
+
 from extraction.ocr import (
     extract_text_ocr,
 )
+
 from extraction.evidence_fusion import (
     fuse_evidence,
 )
+
 from engine.evaluator import (
     evaluate_rules,
 )
+
 from classification.categories import (
     build_classification,
 )
+
 from database.inspections import (
     init_db,
     save_inspection,
@@ -53,16 +66,18 @@ from database.inspections import (
     get_inspection_by_id,
     update_inspector_review,
 )
+
 from ingestion.image_quality import (
     check_image_quality,
 )
 
 
-# --------------------------------------------------
-# Database debugging
-# --------------------------------------------------
+# ============================================================
+# DATABASE DEBUGGING
+# ============================================================
 
 import database.inspections as inspections_module
+
 
 print(
     "DATABASE MODULE:",
@@ -75,6 +90,7 @@ print(
 )
 
 print("SAVE_INSPECTION FUNCTION:")
+
 print(
     inspect.signature(
         save_inspection
@@ -82,9 +98,9 @@ print(
 )
 
 
-# --------------------------------------------------
-# FastAPI application
-# --------------------------------------------------
+# ============================================================
+# FASTAPI APPLICATION
+# ============================================================
 
 app = FastAPI(
     title="Nometra API",
@@ -96,9 +112,9 @@ app = FastAPI(
 )
 
 
-# --------------------------------------------------
+# ============================================================
 # CORS
-# --------------------------------------------------
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,23 +129,23 @@ app.add_middleware(
 )
 
 
-# --------------------------------------------------
-# Database initialization
-# --------------------------------------------------
+# ============================================================
+# DATABASE INITIALIZATION
+# ============================================================
 
 init_db()
 
 
-# --------------------------------------------------
-# Router
-# --------------------------------------------------
+# ============================================================
+# ROUTER
+# ============================================================
 
 router = APIRouter()
 
 
-# --------------------------------------------------
-# Upload configuration
-# --------------------------------------------------
+# ============================================================
+# UPLOAD CONFIGURATION
+# ============================================================
 
 UPLOAD_FOLDER = os.path.join(
     os.path.dirname(
@@ -190,9 +206,7 @@ def _calculate_sha256(
     ) as evidence_file:
 
         for chunk in iter(
-            lambda: evidence_file.read(
-                8192
-            ),
+            lambda: evidence_file.read(8192),
             b"",
         ):
             sha256.update(chunk)
@@ -213,7 +227,7 @@ def _parse_image_sides(
     Some command-line clients or proxies may escape
     the quotation marks and send:
 
-        [\"FRONT\"]
+        [\\"FRONT\\"]
 
     This helper accepts both representations while
     keeping the API contract as a JSON array.
@@ -235,6 +249,7 @@ def _parse_image_sides(
 
     # First attempt: normal JSON.
     try:
+
         parsed = json.loads(value)
 
         if isinstance(parsed, list):
@@ -246,6 +261,7 @@ def _parse_image_sides(
     # Second attempt: JSON whose quotation marks
     # were escaped by a shell/client.
     try:
+
         unescaped_value = value.replace(
             '\\"',
             '"',
@@ -266,9 +282,9 @@ def _parse_image_sides(
     )
 
 
-# --------------------------------------------------
-# Image Quality Endpoint
-# --------------------------------------------------
+# ============================================================
+# IMAGE QUALITY ENDPOINT
+# ============================================================
 
 @router.post(
     "/image-quality"
@@ -442,6 +458,7 @@ async def image_quality_check(
         print(
             "=========================================="
         )
+
         print("")
 
         # --------------------------------------------------
@@ -498,9 +515,9 @@ async def image_quality_check(
                 )
 
 
-# --------------------------------------------------
-# Scan endpoint
-# --------------------------------------------------
+# ============================================================
+# SCAN ENDPOINT
+# ============================================================
 
 @router.post(
     "/scan"
@@ -544,6 +561,18 @@ async def scan_label(
         Database
               ↓
         Compliance Report
+
+    Product-name traceability:
+
+        Gemini product name
+              ↓
+        gemini_product_name
+              ↓
+        initial product_name
+              ↓
+        Inspector Review
+              ↓
+        final product_name
     """
 
     # --------------------------------------------------
@@ -972,6 +1001,71 @@ async def scan_label(
             f"{gemini_time:.3f} sec"
         )
 
+        # --------------------------------------------------
+        # 8A. Preserve Gemini's original product name
+        # --------------------------------------------------
+        #
+        # This value is captured BEFORE evidence fusion
+        # and BEFORE inspector review.
+        #
+        # It is stored separately so that an inspector's
+        # correction never overwrites Gemini's original
+        # extraction.
+
+        gemini_product_name = None
+
+        if isinstance(
+            gemini_result,
+            dict,
+        ):
+
+            raw_product_name = (
+                gemini_result.get(
+                    "product_name"
+                )
+            )
+
+            if isinstance(
+                raw_product_name,
+                dict,
+            ):
+
+                raw_product_name = (
+                    raw_product_name.get(
+                        "value"
+                    )
+                )
+
+            if raw_product_name is not None:
+
+                raw_product_name = str(
+                    raw_product_name
+                ).strip()
+
+                if raw_product_name:
+
+                    gemini_product_name = (
+                        raw_product_name
+                    )
+
+        # At scan time, the inspector has not changed
+        # anything yet, so the final product name starts
+        # as Gemini's suggestion.
+
+        product_name = (
+            gemini_product_name
+        )
+
+        print(
+            "GEMINI PRODUCT NAME:",
+            gemini_product_name,
+        )
+
+        print(
+            "INITIAL PRODUCT NAME:",
+            product_name,
+        )
+
         print(
             "GEMINI COUNTRY OF ORIGIN:",
             gemini_result.get(
@@ -1228,6 +1322,7 @@ async def scan_label(
         print(
             "================================"
         )
+
         print("")
 
         # --------------------------------------------------
@@ -1248,16 +1343,37 @@ async def scan_label(
             evidence_timestamp,
         )
 
+        print(
+            "  gemini_product_name:",
+            gemini_product_name,
+        )
+
+        print(
+            "  product_name:",
+            product_name,
+        )
+
         save_start = time.perf_counter()
 
         inspection_id = (
             save_inspection(
                 fused_evidence,
                 compliance_report,
+
                 evidence_hash=
                     combined_evidence_hash,
+
                 evidence_timestamp=
                     evidence_timestamp,
+
+                # Preserve Gemini's original extraction.
+                gemini_product_name=
+                    gemini_product_name,
+
+                # Initial final name.
+                # Inspector can change this later.
+                product_name=
+                    product_name,
             )
         )
 
@@ -1280,6 +1396,16 @@ async def scan_label(
         response = {
             "inspection_id":
                 inspection_id,
+
+            # ------------------------------------------------
+            # Product-name traceability
+            # ------------------------------------------------
+
+            "gemini_product_name":
+                gemini_product_name,
+
+            "product_name":
+                product_name,
 
             "classification": {
                 "category":
@@ -1405,6 +1531,7 @@ async def scan_label(
         print(
             "=========================================="
         )
+
         print("")
 
         return response
@@ -1452,19 +1579,22 @@ async def scan_label(
             ):
 
                 try:
+
                     os.remove(
                         temp_path
                     )
+
                 except OSError as cleanup_error:
+
                     print(
                         "TEMP FILE CLEANUP ERROR:",
                         cleanup_error,
                     )
 
 
-# --------------------------------------------------
-# Inspector review endpoint
-# --------------------------------------------------
+# ============================================================
+# INSPECTOR REVIEW ENDPOINT
+# ============================================================
 
 @router.put(
     "/inspections/{inspection_id}/review"
@@ -1476,6 +1606,16 @@ async def save_inspector_review(
     """
     Persists the inspector's review for an
     existing inspection.
+
+    Product-name behavior:
+
+        gemini_product_name
+            ↓
+        remains unchanged
+
+        product_name
+            ↓
+        may be edited by inspector
     """
 
     inspection = (
@@ -1515,6 +1655,18 @@ async def save_inspector_review(
         "final_status"
     )
 
+    # --------------------------------------------------
+    # Product name from inspector
+    # --------------------------------------------------
+
+    product_name = data.get(
+        "product_name"
+    )
+
+    # --------------------------------------------------
+    # Validate inspector decisions
+    # --------------------------------------------------
+
     if not isinstance(
         inspector_decisions,
         dict,
@@ -1529,6 +1681,10 @@ async def save_inspector_review(
                 )
             },
         )
+
+    # --------------------------------------------------
+    # Validate inspector notes
+    # --------------------------------------------------
 
     if not isinstance(
         inspector_notes,
@@ -1545,6 +1701,10 @@ async def save_inspector_review(
             },
         )
 
+    # --------------------------------------------------
+    # Validate inspector remarks
+    # --------------------------------------------------
+
     if not isinstance(
         inspector_remarks,
         str,
@@ -1559,6 +1719,10 @@ async def save_inspector_review(
                 )
             },
         )
+
+    # --------------------------------------------------
+    # Validate final status
+    # --------------------------------------------------
 
     if (
         final_status is not None
@@ -1578,6 +1742,32 @@ async def save_inspector_review(
             },
         )
 
+    # --------------------------------------------------
+    # Validate product name
+    # --------------------------------------------------
+
+    if (
+        product_name is not None
+        and not isinstance(
+            product_name,
+            str,
+        )
+    ):
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "product_name must be "
+                    "a string or null."
+                )
+            },
+        )
+
+    # --------------------------------------------------
+    # Update inspection
+    # --------------------------------------------------
+
     updated = (
         update_inspector_review(
             inspection_id=
@@ -1594,6 +1784,9 @@ async def save_inspector_review(
 
             final_status=
                 final_status,
+
+            product_name=
+                product_name,
         )
     )
 
@@ -1608,6 +1801,10 @@ async def save_inspector_review(
                 )
             },
         )
+
+    # --------------------------------------------------
+    # Retrieve updated inspection
+    # --------------------------------------------------
 
     updated_inspection = (
         get_inspection_by_id(
@@ -1624,9 +1821,9 @@ async def save_inspector_review(
     }
 
 
-# --------------------------------------------------
-# Historical inspections
-# --------------------------------------------------
+# ============================================================
+# HISTORICAL INSPECTIONS
+# ============================================================
 
 @router.get(
     "/inspections"
@@ -1646,6 +1843,10 @@ async def list_inspections():
             inspections
     }
 
+
+# ============================================================
+# GET SINGLE INSPECTION
+# ============================================================
 
 @router.get(
     "/inspections/{inspection_id}"
@@ -1678,9 +1879,9 @@ async def get_inspection(
     return inspection
 
 
-# --------------------------------------------------
-# Health check
-# --------------------------------------------------
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
 @router.get(
     "/health"
@@ -1692,18 +1893,18 @@ async def health_check():
     }
 
 
-# --------------------------------------------------
-# Register API routes
-# --------------------------------------------------
+# ============================================================
+# REGISTER API ROUTES
+# ============================================================
 
 app.include_router(
     router
 )
 
 
-# --------------------------------------------------
-# Report routes
-# --------------------------------------------------
+# ============================================================
+# REPORT ROUTES
+# ============================================================
 
 try:
 
@@ -1723,9 +1924,9 @@ except ImportError as e:
     )
 
 
-# --------------------------------------------------
-# Uvicorn entry point
-# --------------------------------------------------
+# ============================================================
+# UVICORN ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
 
