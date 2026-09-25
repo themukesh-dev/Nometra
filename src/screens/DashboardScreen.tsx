@@ -5,7 +5,7 @@ import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
 import type { ComplianceStatus } from '../types';
 
-const API_BASE_URL = 'http://127.0.0.1:5000';
+const API_BASE_URL = '/api';
 
 type BackendInspection = {
   id: number;

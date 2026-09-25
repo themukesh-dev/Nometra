@@ -4,7 +4,12 @@ import os
 from datetime import datetime, timezone
 
 
-# The database file will live at backend/database/compliance.db
+# ============================================================
+# DATABASE CONFIGURATION
+# ============================================================
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 DB_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "compliance.db",
@@ -18,83 +23,143 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ============================================================
+# CONNECTION
+# ============================================================
+
+def _get_connection():
+    """
+    Returns a database connection.
+
+    Production:
+        Uses PostgreSQL when DATABASE_URL is configured.
+
+    Local development:
+        Falls back to SQLite when DATABASE_URL is not configured.
+    """
+
+    if DATABASE_URL:
+        import psycopg2
+
+        return psycopg2.connect(DATABASE_URL)
+
+    return sqlite3.connect(DB_PATH)
+
+
+def _is_postgresql() -> bool:
+    """
+    Returns True when Nometra is connected to PostgreSQL.
+    """
+    return bool(DATABASE_URL)
+
+
+# ============================================================
+# DATABASE INITIALIZATION
+# ============================================================
+
 def init_db():
     """
-    Creates the inspections table if it doesn't already exist.
+    Creates the inspections table if it does not already exist.
 
-    Also performs lightweight migrations for databases created
-    by earlier versions of Nometra.
+    PostgreSQL is used in production when DATABASE_URL exists.
+
+    SQLite remains available as a local-development fallback.
     """
-    conn = sqlite3.connect(DB_PATH)
+
+    conn = _get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS inspections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            overall_status TEXT NOT NULL,
-            passed INTEGER NOT NULL,
-            failed INTEGER NOT NULL,
-            extracted_data TEXT NOT NULL,
-            compliance_report TEXT NOT NULL,
-            evidence_hash TEXT,
-            evidence_timestamp TEXT,
-            inspector_decisions TEXT,
-            inspector_notes TEXT,
-            inspector_remarks TEXT,
-            final_status TEXT
-        )
-    """)
+    if _is_postgresql():
 
-    # --------------------------------------------------
-    # Database migration
-    # --------------------------------------------------
-    #
-    # Existing Nometra databases may already have the
-    # inspections table without the newer columns.
-    # --------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inspections (
+                id BIGSERIAL PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                overall_status TEXT NOT NULL,
+                passed INTEGER NOT NULL,
+                failed INTEGER NOT NULL,
+                extracted_data TEXT NOT NULL,
+                compliance_report TEXT NOT NULL,
+                evidence_hash TEXT,
+                evidence_timestamp TEXT,
+                inspector_decisions TEXT,
+                inspector_notes TEXT,
+                inspector_remarks TEXT,
+                final_status TEXT
+            )
+        """)
 
-    cursor.execute("PRAGMA table_info(inspections)")
+    else:
 
-    existing_columns = {
-        row[1]
-        for row in cursor.fetchall()
-    }
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inspections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                overall_status TEXT NOT NULL,
+                passed INTEGER NOT NULL,
+                failed INTEGER NOT NULL,
+                extracted_data TEXT NOT NULL,
+                compliance_report TEXT NOT NULL,
+                evidence_hash TEXT,
+                evidence_timestamp TEXT,
+                inspector_decisions TEXT,
+                inspector_notes TEXT,
+                inspector_remarks TEXT,
+                final_status TEXT
+            )
+        """)
 
-    migrations = {
-        "evidence_hash": """
-            ALTER TABLE inspections
-            ADD COLUMN evidence_hash TEXT
-        """,
-        "evidence_timestamp": """
-            ALTER TABLE inspections
-            ADD COLUMN evidence_timestamp TEXT
-        """,
-        "inspector_decisions": """
-            ALTER TABLE inspections
-            ADD COLUMN inspector_decisions TEXT
-        """,
-        "inspector_notes": """
-            ALTER TABLE inspections
-            ADD COLUMN inspector_notes TEXT
-        """,
-        "inspector_remarks": """
-            ALTER TABLE inspections
-            ADD COLUMN inspector_remarks TEXT
-        """,
-        "final_status": """
-            ALTER TABLE inspections
-            ADD COLUMN final_status TEXT
-        """,
-    }
+        # --------------------------------------------------
+        # SQLite migrations for older local databases
+        # --------------------------------------------------
 
-    for column_name, sql in migrations.items():
-        if column_name not in existing_columns:
-            cursor.execute(sql)
+        cursor.execute("PRAGMA table_info(inspections)")
+
+        existing_columns = {
+            row[1]
+            for row in cursor.fetchall()
+        }
+
+        migrations = {
+            "evidence_hash": """
+                ALTER TABLE inspections
+                ADD COLUMN evidence_hash TEXT
+            """,
+            "evidence_timestamp": """
+                ALTER TABLE inspections
+                ADD COLUMN evidence_timestamp TEXT
+            """,
+            "inspector_decisions": """
+                ALTER TABLE inspections
+                ADD COLUMN inspector_decisions TEXT
+            """,
+            "inspector_notes": """
+                ALTER TABLE inspections
+                ADD COLUMN inspector_notes TEXT
+            """,
+            "inspector_remarks": """
+                ALTER TABLE inspections
+                ADD COLUMN inspector_remarks TEXT
+            """,
+            "final_status": """
+                ALTER TABLE inspections
+                ADD COLUMN final_status TEXT
+            """,
+        }
+
+        for column_name, sql in migrations.items():
+
+            if column_name not in existing_columns:
+                cursor.execute(sql)
 
     conn.commit()
+    cursor.close()
     conn.close()
 
+
+# ============================================================
+# SAVE INSPECTION
+# ============================================================
 
 def save_inspection(
     extracted_data: dict,
@@ -109,76 +174,99 @@ def save_inspection(
     """
     Saves one scan result to the database.
 
-    extracted_data and compliance_report are stored as JSON.
-
-    Inspector review data is also persisted as part of the
-    inspection audit record.
-
-    evidence_hash:
-        SHA-256 hash of the uploaded evidence image.
-
-    evidence_timestamp:
-        UTC timestamp associated with the evidence record.
-
-    inspector_decisions:
-        Mapping of frontend finding IDs to inspector decisions.
-
-    inspector_notes:
-        Mapping of frontend finding IDs to inspector notes.
-
-    inspector_remarks:
-        Overall remarks entered by the inspector.
-
-    final_status:
-        Final status after inspector review.
-
-    Returns the new row's id.
+    Returns the new inspection ID.
     """
 
     if evidence_timestamp is None:
         evidence_timestamp = _utc_timestamp()
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        INSERT INTO inspections (
-            timestamp,
-            overall_status,
-            passed,
-            failed,
-            extracted_data,
-            compliance_report,
+    if _is_postgresql():
+
+        cursor.execute("""
+            INSERT INTO inspections (
+                timestamp,
+                overall_status,
+                passed,
+                failed,
+                extracted_data,
+                compliance_report,
+                evidence_hash,
+                evidence_timestamp,
+                inspector_decisions,
+                inspector_notes,
+                inspector_remarks,
+                final_status
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s
+            )
+            RETURNING id
+        """, (
+            _utc_timestamp(),
+            compliance_report["overall_status"],
+            compliance_report["passed"],
+            compliance_report["failed"],
+            json.dumps(extracted_data),
+            json.dumps(compliance_report),
             evidence_hash,
             evidence_timestamp,
-            inspector_decisions,
-            inspector_notes,
-            inspector_remarks,
-            final_status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        _utc_timestamp(),
-        compliance_report["overall_status"],
-        compliance_report["passed"],
-        compliance_report["failed"],
-        json.dumps(extracted_data),
-        json.dumps(compliance_report),
-        evidence_hash,
-        evidence_timestamp,
-        json.dumps(inspector_decisions or {}),
-        json.dumps(inspector_notes or {}),
-        inspector_remarks or "",
-        final_status,
-    ))
+            json.dumps(inspector_decisions or {}),
+            json.dumps(inspector_notes or {}),
+            inspector_remarks or "",
+            final_status,
+        ))
 
-    new_id = cursor.lastrowid
+        new_id = cursor.fetchone()[0]
+
+    else:
+
+        cursor.execute("""
+            INSERT INTO inspections (
+                timestamp,
+                overall_status,
+                passed,
+                failed,
+                extracted_data,
+                compliance_report,
+                evidence_hash,
+                evidence_timestamp,
+                inspector_decisions,
+                inspector_notes,
+                inspector_remarks,
+                final_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            _utc_timestamp(),
+            compliance_report["overall_status"],
+            compliance_report["passed"],
+            compliance_report["failed"],
+            json.dumps(extracted_data),
+            json.dumps(compliance_report),
+            evidence_hash,
+            evidence_timestamp,
+            json.dumps(inspector_decisions or {}),
+            json.dumps(inspector_notes or {}),
+            inspector_remarks or "",
+            final_status,
+        ))
+
+        new_id = cursor.lastrowid
 
     conn.commit()
+    cursor.close()
     conn.close()
 
     return new_id
 
+
+# ============================================================
+# UPDATE INSPECTOR REVIEW
+# ============================================================
 
 def update_inspector_review(
     inspection_id: int,
@@ -188,54 +276,64 @@ def update_inspector_review(
     final_status: str | None = None,
 ) -> bool:
     """
-    Persists inspector review information for an existing inspection.
-
-    This is used after the inspector reviews the system findings.
-
-    Returns True when the inspection exists and was updated.
+    Persists inspector review information.
     """
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE inspections
-        SET
-            inspector_decisions = ?,
-            inspector_notes = ?,
-            inspector_remarks = ?,
-            final_status = ?
-        WHERE id = ?
-    """, (
-        json.dumps(inspector_decisions or {}),
-        json.dumps(inspector_notes or {}),
-        inspector_remarks or "",
-        final_status,
-        inspection_id,
-    ))
+    if _is_postgresql():
+
+        cursor.execute("""
+            UPDATE inspections
+            SET
+                inspector_decisions = %s,
+                inspector_notes = %s,
+                inspector_remarks = %s,
+                final_status = %s
+            WHERE id = %s
+        """, (
+            json.dumps(inspector_decisions or {}),
+            json.dumps(inspector_notes or {}),
+            inspector_remarks or "",
+            final_status,
+            inspection_id,
+        ))
+
+    else:
+
+        cursor.execute("""
+            UPDATE inspections
+            SET
+                inspector_decisions = ?,
+                inspector_notes = ?,
+                inspector_remarks = ?,
+                final_status = ?
+            WHERE id = ?
+        """, (
+            json.dumps(inspector_decisions or {}),
+            json.dumps(inspector_notes or {}),
+            inspector_remarks or "",
+            final_status,
+            inspection_id,
+        ))
 
     updated = cursor.rowcount > 0
 
     conn.commit()
+    cursor.close()
     conn.close()
 
     return updated
 
 
+# ============================================================
+# PRODUCT NAME EXTRACTION
+# ============================================================
+
 def _extract_product_name(extracted_data) -> str:
     """
     Extracts the product name from the stored evidence structure.
-
-    Nometra normally stores fields in the form:
-
-        "product_name": {
-            "value": "DETERGENT CAKE",
-            "source": "gemini_vision",
-            "verified_by_ocr": True
-        }
-
-    This helper also handles simpler historical formats so that
-    older inspections do not break.
     """
 
     if not isinstance(extracted_data, dict):
@@ -270,29 +368,29 @@ def _extract_product_name(extracted_data) -> str:
     return ""
 
 
+# ============================================================
+# GET ALL INSPECTIONS
+# ============================================================
+
 def get_all_inspections() -> list:
     """
-    Returns a summary list of all past inspections
-    (most recent first).
-
-    Includes:
-
-    - inspection ID
-    - timestamp
-    - product name
-    - compliance status
-    - passed/failed counts
-    - evidence integrity metadata
-    - inspector review status
-
-    The full extracted_data and compliance_report are
-    intentionally not returned here because this endpoint
-    is used for the lightweight inspection history list.
+    Returns a summary list of all past inspections.
     """
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    conn = _get_connection()
+
+    if _is_postgresql():
+
+        from psycopg2.extras import RealDictCursor
+
+        cursor = conn.cursor(
+            cursor_factory=RealDictCursor
+        )
+
+    else:
+
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
 
     cursor.execute("""
         SELECT
@@ -313,6 +411,8 @@ def get_all_inspections() -> list:
     """)
 
     rows = cursor.fetchall()
+
+    cursor.close()
     conn.close()
 
     results = []
@@ -322,20 +422,23 @@ def get_all_inspections() -> list:
         result = dict(row)
 
         # --------------------------------------------------
-        # Extract product name for inspection history
+        # Extract product name
         # --------------------------------------------------
 
         try:
+
             extracted_data = json.loads(
                 result.get(
                     "extracted_data",
                     "{}",
                 )
             )
+
         except (
             json.JSONDecodeError,
             TypeError,
         ):
+
             extracted_data = {}
 
         product_name = _extract_product_name(
@@ -349,8 +452,8 @@ def get_all_inspections() -> list:
         )
 
         # --------------------------------------------------
-        # Full extracted_data is not returned in the
-        # history response.
+        # Full extracted_data is not returned
+        # in inspection history.
         # --------------------------------------------------
 
         result.pop(
@@ -362,36 +465,72 @@ def get_all_inspections() -> list:
         # Inspector review data
         # --------------------------------------------------
 
-        result["inspector_decisions"] = json.loads(
-            result["inspector_decisions"]
-        ) if result["inspector_decisions"] else {}
+        result["inspector_decisions"] = (
+            json.loads(
+                result["inspector_decisions"]
+            )
+            if result["inspector_decisions"]
+            else {}
+        )
 
-        result["inspector_notes"] = json.loads(
-            result["inspector_notes"]
-        ) if result["inspector_notes"] else {}
+        result["inspector_notes"] = (
+            json.loads(
+                result["inspector_notes"]
+            )
+            if result["inspector_notes"]
+            else {}
+        )
 
         results.append(result)
 
     return results
 
 
+# ============================================================
+# GET SINGLE INSPECTION
+# ============================================================
+
 def get_inspection_by_id(inspection_id: int):
     """
-    Returns the full details for one past scan,
-    including evidence integrity metadata and
-    inspector review information.
+    Returns the full details for one inspection.
     """
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    conn = _get_connection()
 
-    cursor.execute(
-        "SELECT * FROM inspections WHERE id = ?",
-        (inspection_id,),
-    )
+    if _is_postgresql():
+
+        from psycopg2.extras import RealDictCursor
+
+        cursor = conn.cursor(
+            cursor_factory=RealDictCursor
+        )
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM inspections
+            WHERE id = %s
+            """,
+            (inspection_id,),
+        )
+
+    else:
+
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM inspections
+            WHERE id = ?
+            """,
+            (inspection_id,),
+        )
 
     row = cursor.fetchone()
+
+    cursor.close()
     conn.close()
 
     if row is None:
@@ -407,27 +546,44 @@ def get_inspection_by_id(inspection_id: int):
         result["compliance_report"]
     )
 
-    result["inspector_decisions"] = json.loads(
-        result["inspector_decisions"]
-    ) if result.get("inspector_decisions") else {}
+    result["inspector_decisions"] = (
+        json.loads(
+            result["inspector_decisions"]
+        )
+        if result.get("inspector_decisions")
+        else {}
+    )
 
-    result["inspector_notes"] = json.loads(
-        result["inspector_notes"]
-    ) if result.get("inspector_notes") else {}
+    result["inspector_notes"] = (
+        json.loads(
+            result["inspector_notes"]
+        )
+        if result.get("inspector_notes")
+        else {}
+    )
 
     return result
 
 
-# --------------------------------------------------
-# Standalone test runner
-# --------------------------------------------------
+# ============================================================
+# STANDALONE TEST RUNNER
+# ============================================================
 
 if __name__ == "__main__":
+
     init_db()
 
-    print(
-        f"Database initialized at: {DB_PATH}"
-    )
+    if DATABASE_URL:
+
+        print(
+            "Database initialized using PostgreSQL."
+        )
+
+    else:
+
+        print(
+            f"Database initialized using SQLite at: {DB_PATH}"
+        )
 
     fake_extracted = {
         "product_name": {

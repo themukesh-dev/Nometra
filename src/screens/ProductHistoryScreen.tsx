@@ -11,7 +11,7 @@ import MobileShell from '../components/MobileShell';
 import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
 
-const API_BASE_URL = 'http://127.0.0.1:5000';
+const API_BASE_URL = '/api';
 
 type HistoricalRuleResult = {
   rule_id?: string;
