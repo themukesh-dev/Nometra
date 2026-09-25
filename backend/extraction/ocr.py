@@ -1,13 +1,21 @@
- 
+
 # backend/extraction/ocr.py
 
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 
 import pytesseract
 from PIL import Image
+
+
+# ---------------------------------------------------------------------------
+# CONFIGURATION
+# ---------------------------------------------------------------------------
+
+TESSERACT_TIMEOUT_SECONDS = 4
 
 
 # ---------------------------------------------------------------------------
@@ -32,13 +40,16 @@ else:
 
 def extract_text_ocr(image_path: str) -> str:
     """
-    Takes a path to a label image, runs it through Tesseract OCR,
-    and returns the raw OCR text as a string.
+    Runs Tesseract OCR with a hard execution timeout.
 
-    Tesseract does not interpret the meaning of the text. It simply
-    returns the text it can read from the image. The evidence-fusion
-    layer later uses this raw text as an independent cross-check
+    Tesseract is used as an independent OCR verification source
     against Gemini Vision extraction.
+
+    If Tesseract takes longer than TESSERACT_TIMEOUT_SECONDS,
+    the OCR process is terminated and an empty string is returned.
+
+    This prevents slow OCR on low-resource production environments
+    from blocking the complete Nometra inspection.
     """
 
     total_start = time.perf_counter()
@@ -50,8 +61,16 @@ def extract_text_ocr(image_path: str) -> str:
 
         tesseract_path = pytesseract.pytesseract.tesseract_cmd
 
+        if not tesseract_path:
+            tesseract_path = shutil.which("tesseract")
+
         print("========== TESSERACT DIAGNOSTICS ==========")
         print(f"TESSERACT PATH: {tesseract_path}")
+        print(f"TESSERACT TIMEOUT: {TESSERACT_TIMEOUT_SECONDS} sec")
+
+        if not tesseract_path:
+            print("TESSERACT ERROR: executable not found")
+            return ""
 
         # ---------------------------------------------------------------
         # TESSERACT VERSION
@@ -72,7 +91,11 @@ def extract_text_ocr(image_path: str) -> str:
                 or version_result.stderr.strip()
             )
 
-            first_line = version_output.splitlines()[0] if version_output else "UNKNOWN"
+            first_line = (
+                version_output.splitlines()[0]
+                if version_output
+                else "UNKNOWN"
+            )
 
             print(f"TESSERACT VERSION: {first_line}")
 
@@ -90,6 +113,10 @@ def extract_text_ocr(image_path: str) -> str:
 
         image = Image.open(image_path)
 
+        # Make sure the image is fully loaded before passing it
+        # to the temporary TIFF file.
+        image.load()
+
         image_time = time.perf_counter() - image_start
 
         print(f"IMAGE OPEN TIME: {image_time:.3f} sec")
@@ -97,33 +124,116 @@ def extract_text_ocr(image_path: str) -> str:
         print(f"IMAGE MODE: {image.mode}")
 
         # ---------------------------------------------------------------
-        # TESSERACT OCR
+        # CREATE TEMPORARY IMAGE
         # ---------------------------------------------------------------
 
-        ocr_start = time.perf_counter()
+        temp_start = time.perf_counter()
 
-        raw_text = pytesseract.image_to_string(image)
+        temp_file = tempfile.NamedTemporaryFile(
+            suffix=".png",
+            delete=False,
+        )
 
-        ocr_time = time.perf_counter() - ocr_start
+        temp_image_path = temp_file.name
+        temp_file.close()
 
-        print(f"TESSERACT OCR EXECUTION TIME: {ocr_time:.3f} sec")
+        try:
+            image.save(temp_image_path, format="PNG")
 
-        # ---------------------------------------------------------------
-        # TOTAL
-        # ---------------------------------------------------------------
+            temp_time = time.perf_counter() - temp_start
 
-        total_time = time.perf_counter() - total_start
+            print(f"TEMP IMAGE CREATION TIME: {temp_time:.3f} sec")
 
-        print(f"TOTAL OCR FUNCTION TIME: {total_time:.3f} sec")
-        print("============================================")
+            # -----------------------------------------------------------
+            # TESSERACT OCR
+            # -----------------------------------------------------------
 
-        return raw_text.strip()
+            ocr_start = time.perf_counter()
+
+            try:
+                process = subprocess.run(
+                    [
+                        tesseract_path,
+                        temp_image_path,
+                        "stdout",
+                        "--psm",
+                        "3",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=TESSERACT_TIMEOUT_SECONDS,
+                )
+
+                raw_text = process.stdout or ""
+
+                ocr_time = time.perf_counter() - ocr_start
+
+                print(
+                    f"TESSERACT OCR EXECUTION TIME: "
+                    f"{ocr_time:.3f} sec"
+                )
+
+                if process.returncode != 0:
+                    print(
+                        f"TESSERACT PROCESS RETURN CODE: "
+                        f"{process.returncode}"
+                    )
+
+                # -------------------------------------------------------
+                # TOTAL
+                # -------------------------------------------------------
+
+                total_time = time.perf_counter() - total_start
+
+                print(f"TOTAL OCR FUNCTION TIME: {total_time:.3f} sec")
+                print("============================================")
+
+                return raw_text.strip()
+
+            except subprocess.TimeoutExpired:
+                timeout_time = time.perf_counter() - ocr_start
+
+                print(
+                    f"TESSERACT OCR TIMEOUT: "
+                    f"exceeded {TESSERACT_TIMEOUT_SECONDS} sec"
+                )
+
+                print(
+                    f"TESSERACT OCR TIME BEFORE TIMEOUT: "
+                    f"{timeout_time:.3f} sec"
+                )
+
+                total_time = time.perf_counter() - total_start
+
+                print(
+                    f"TOTAL OCR FUNCTION TIME: "
+                    f"{total_time:.3f} sec"
+                )
+
+                print("============================================")
+
+                return ""
+
+        finally:
+            # -----------------------------------------------------------
+            # CLEAN TEMPORARY FILE
+            # -----------------------------------------------------------
+
+            try:
+                os.remove(temp_image_path)
+            except OSError:
+                pass
 
     except Exception as e:
         total_time = time.perf_counter() - total_start
 
         print(f"Tesseract OCR error: {e}")
-        print(f"TOTAL OCR FUNCTION TIME BEFORE ERROR: {total_time:.3f} sec")
+        print(
+            f"TOTAL OCR FUNCTION TIME BEFORE ERROR: "
+            f"{total_time:.3f} sec"
+        )
+
+        print("============================================")
 
         return ""
 
