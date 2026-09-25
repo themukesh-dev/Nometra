@@ -519,7 +519,7 @@ async def scan_label(
               ↓
         Gemini Vision
               ↓
-        PaddleOCR
+        Tesseract OCR
               ↓
         Evidence Fusion
               ↓
@@ -908,11 +908,11 @@ async def scan_label(
         )
 
         # --------------------------------------------------
-        # 9. PaddleOCR
+        # 9. Tesseract OCR
         # --------------------------------------------------
 
         print(
-            "PADDLEOCR:",
+            "TESSERACT OCR:",
             side,
         )
 
@@ -923,7 +923,7 @@ async def scan_label(
         )
 
         print(
-            "PADDLEOCR RESULT AVAILABLE:",
+            "TESSERACT OCR RESULT AVAILABLE:",
             bool(ocr_result),
         )
 
