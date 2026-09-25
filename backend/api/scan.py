@@ -6,6 +6,7 @@ import uuid
 import hashlib
 import inspect
 import json
+import time
 from datetime import datetime, timezone
 
 from fastapi import (
@@ -383,10 +384,21 @@ async def image_quality_check(
             "RUNNING OPENCV IMAGE QUALITY..."
         )
 
+        quality_start = time.perf_counter()
+
         quality_result = (
             check_image_quality(
                 temp_path
             )
+        )
+
+        quality_time = (
+            time.perf_counter()
+            - quality_start
+        )
+
+        print(
+            f"IMAGE QUALITY TIME: {quality_time:.3f} sec"
         )
 
         # --------------------------------------------------
@@ -533,6 +545,12 @@ async def scan_label(
               ↓
         Compliance Report
     """
+
+    # --------------------------------------------------
+    # TOTAL TIMER
+    # --------------------------------------------------
+
+    total_start = time.perf_counter()
 
     temporary_images = []
 
@@ -707,6 +725,8 @@ async def scan_label(
             sale_type,
         )
 
+        classification_start = time.perf_counter()
+
         try:
 
             classification = (
@@ -726,9 +746,21 @@ async def scan_label(
                 },
             )
 
+        classification_time = (
+            time.perf_counter()
+            - classification_start
+        )
+
+        print(
+            f"CLASSIFICATION TIME: "
+            f"{classification_time:.3f} sec"
+        )
+
         # --------------------------------------------------
         # 5. Save uploaded image temporarily
         # --------------------------------------------------
+
+        upload_start = time.perf_counter()
 
         file_extension = (
             image_file.filename
@@ -781,9 +813,20 @@ async def scan_label(
             }
         )
 
+        upload_time = (
+            time.perf_counter()
+            - upload_start
+        )
+
+        print(
+            f"IMAGE SAVE TIME: {upload_time:.3f} sec"
+        )
+
         # --------------------------------------------------
         # 6. Evidence integrity
         # --------------------------------------------------
+
+        evidence_start = time.perf_counter()
 
         evidence_timestamp = (
             datetime.now(
@@ -819,6 +862,16 @@ async def scan_label(
         # the combined evidence hash is the image hash.
         combined_evidence_hash = image_hash
 
+        evidence_time = (
+            time.perf_counter()
+            - evidence_start
+        )
+
+        print(
+            f"EVIDENCE HASH TIME: "
+            f"{evidence_time:.3f} sec"
+        )
+
         # --------------------------------------------------
         # 7. OpenCV image-quality check
         # --------------------------------------------------
@@ -828,10 +881,22 @@ async def scan_label(
             side,
         )
 
+        quality_start = time.perf_counter()
+
         image_quality = (
             check_image_quality(
                 temp_path
             )
+        )
+
+        quality_time = (
+            time.perf_counter()
+            - quality_start
+        )
+
+        print(
+            f"IMAGE QUALITY TIME: "
+            f"{quality_time:.3f} sec"
         )
 
         print(
@@ -889,10 +954,22 @@ async def scan_label(
             side,
         )
 
+        gemini_start = time.perf_counter()
+
         gemini_result = (
             extract_label_data(
                 temp_path
             )
+        )
+
+        gemini_time = (
+            time.perf_counter()
+            - gemini_start
+        )
+
+        print(
+            f"GEMINI VISION TIME: "
+            f"{gemini_time:.3f} sec"
         )
 
         print(
@@ -916,10 +993,22 @@ async def scan_label(
             side,
         )
 
+        ocr_start = time.perf_counter()
+
         ocr_result = (
             extract_text_ocr(
                 temp_path
             )
+        )
+
+        ocr_time = (
+            time.perf_counter()
+            - ocr_start
+        )
+
+        print(
+            f"TESSERACT OCR TIME: "
+            f"{ocr_time:.3f} sec"
         )
 
         print(
@@ -936,11 +1025,23 @@ async def scan_label(
             side,
         )
 
+        fusion_start = time.perf_counter()
+
         fused_evidence = (
             fuse_evidence(
                 gemini_result,
                 ocr_result,
             )
+        )
+
+        fusion_time = (
+            time.perf_counter()
+            - fusion_start
+        )
+
+        print(
+            f"EVIDENCE FUSION TIME: "
+            f"{fusion_time:.3f} sec"
         )
 
         print(
@@ -1075,11 +1176,23 @@ async def scan_label(
             )
         )
 
+        rule_start = time.perf_counter()
+
         compliance_report = (
             evaluate_rules(
                 fused_evidence,
                 classification,
             )
+        )
+
+        rule_time = (
+            time.perf_counter()
+            - rule_start
+        )
+
+        print(
+            f"RULE ENGINE TIME: "
+            f"{rule_time:.3f} sec"
         )
 
         print(
@@ -1135,6 +1248,8 @@ async def scan_label(
             evidence_timestamp,
         )
 
+        save_start = time.perf_counter()
+
         inspection_id = (
             save_inspection(
                 fused_evidence,
@@ -1146,9 +1261,21 @@ async def scan_label(
             )
         )
 
+        save_time = (
+            time.perf_counter()
+            - save_start
+        )
+
+        print(
+            f"DATABASE SAVE TIME: "
+            f"{save_time:.3f} sec"
+        )
+
         # --------------------------------------------------
         # 14. Complete response
         # --------------------------------------------------
+
+        response_build_start = time.perf_counter()
 
         response = {
             "inspection_id":
@@ -1217,13 +1344,86 @@ async def scan_label(
             },
         }
 
+        response_build_time = (
+            time.perf_counter()
+            - response_build_start
+        )
+
+        print(
+            f"RESPONSE BUILD TIME: "
+            f"{response_build_time:.3f} sec"
+        )
+
+        # --------------------------------------------------
+        # TOTAL TIMING
+        # --------------------------------------------------
+
+        total_time = (
+            time.perf_counter()
+            - total_start
+        )
+
+        print("")
+        print(
+            "=========================================="
+        )
+        print(
+            "NOMETRA SCAN TIMING SUMMARY"
+        )
+        print(
+            "=========================================="
+        )
+
+        print(
+            f"Image Quality : {quality_time:.3f} sec"
+        )
+
+        print(
+            f"Gemini Vision : {gemini_time:.3f} sec"
+        )
+
+        print(
+            f"Tesseract OCR : {ocr_time:.3f} sec"
+        )
+
+        print(
+            f"Evidence Fusion: {fusion_time:.3f} sec"
+        )
+
+        print(
+            f"Rule Engine   : {rule_time:.3f} sec"
+        )
+
+        print(
+            f"Database Save : {save_time:.3f} sec"
+        )
+
+        print(
+            f"Total Scan    : {total_time:.3f} sec"
+        )
+
+        print(
+            "=========================================="
+        )
+        print("")
+
         return response
 
     except Exception as e:
 
+        total_time = (
+            time.perf_counter()
+            - total_start
+        )
+
         print(
             "PROCESSING ERROR:",
             str(e),
+        )
+
+        print(
+            f"TOTAL SCAN TIME BEFORE ERROR: "
+            f"{total_time:.3f} sec"
         )
 
         return JSONResponse(
