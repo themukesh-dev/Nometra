@@ -9,7 +9,11 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import MobileShell from '../components/MobileShell';
 import StatusBadge from '../components/StatusBadge';
-import { useApp } from '../context/AppContext';
+import {
+  useApp,
+  type BackendHistoricalInspection,
+  type BackendScanResult,
+} from '../context/AppContext';
 
 const API_BASE_URL = '/api';
 
@@ -21,18 +25,25 @@ type HistoricalRuleResult = {
   source?: string;
   implementation_scope?: string;
   implementation_status?: string;
+  description?: string;
+  reason?: string;
+  extracted_value?: string | null;
+  verified_by_ocr?: boolean;
+
   evidence?: {
     field?: string;
     value?: string | null;
     source?: string;
     verified_by_ocr?: boolean;
   };
+
   trace?: {
     classification?: {
       commodity_type?: string;
       origin?: string;
       sale_type?: string;
     };
+
     applicability?: {
       applicable?: boolean;
       exempted?: boolean;
@@ -40,6 +51,7 @@ type HistoricalRuleResult = {
       decision?: string;
       decision_source?: string;
     };
+
     requirement?: {
       required?: boolean;
       condition?: string;
@@ -50,75 +62,15 @@ type HistoricalRuleResult = {
   };
 };
 
-type HistoricalInspection = {
-  id: number;
-  timestamp?: string;
-  created_at?: string;
-
-  overall_status?:
-    | 'COMPLIANT'
-    | 'NON_COMPLIANT'
-    | 'VERIFICATION_REQUIRED';
-
+type HistoricalInspection = BackendHistoricalInspection & {
   status?:
     | 'COMPLIANT'
     | 'NON_COMPLIANT'
     | 'VERIFICATION_REQUIRED';
 
-  passed?: number;
-  failed?: number;
+  product_name?: string | null;
 
-  evidence_hash?: string | null;
-  evidence_timestamp?: string | null;
-
-  extracted_data?: {
-    product_name?: {
-      value?: string | null;
-      source?: string;
-      verified_by_ocr?: boolean;
-    } | string | null;
-
-    manufacturer_name?: {
-      value?: string | null;
-      source?: string;
-      verified_by_ocr?: boolean;
-    } | string | null;
-
-    mrp?: {
-      value?: string | null;
-      source?: string;
-      verified_by_ocr?: boolean;
-    } | string | null;
-
-    net_quantity?: {
-      value?: string | null;
-      source?: string;
-      verified_by_ocr?: boolean;
-    } | string | null;
-
-    [key: string]: unknown;
-  };
-
-  compliance_report?: {
-    overall_status?:
-      | 'COMPLIANT'
-      | 'NON_COMPLIANT'
-      | 'VERIFICATION_REQUIRED';
-
-    passed?: number;
-    failed?: number;
-    total_rules_checked?: number;
-
-    classification?: {
-      commodity_type?: string;
-      origin?: string;
-      sale_type?: string;
-    };
-
-    results?: HistoricalRuleResult[];
-
-    [key: string]: unknown;
-  };
+  gemini_product_name?: string | null;
 };
 
 function formatDateTime(value?: string) {
@@ -138,24 +90,6 @@ function formatDateTime(value?: string) {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  });
-}
-
-function formatDate(value?: string) {
-  if (!value) {
-    return 'Date unavailable';
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
   });
 }
 
@@ -192,6 +126,33 @@ function getExtractedValue(
 function getProductName(
   inspection: HistoricalInspection
 ) {
+  /*
+   * Prefer the final editable product name
+   * stored directly on the inspection.
+   */
+  if (
+    typeof inspection.product_name ===
+      'string' &&
+    inspection.product_name.trim()
+  ) {
+    return inspection.product_name.trim();
+  }
+
+  /*
+   * Then prefer the original Gemini
+   * product name.
+   */
+  if (
+    typeof inspection.gemini_product_name ===
+      'string' &&
+    inspection.gemini_product_name.trim()
+  ) {
+    return inspection.gemini_product_name.trim();
+  }
+
+  /*
+   * Finally fall back to extracted data.
+   */
   const productName = getExtractedValue(
     inspection.extracted_data?.product_name
   );
@@ -213,33 +174,16 @@ function getProductName(
   return 'Inspected Product';
 }
 
-function shortHash(
-  hash?: string | null
-) {
-  if (!hash) {
-    return 'Not recorded';
-  }
-
-  if (hash.length <= 24) {
-    return hash;
-  }
-
-  return `${hash.slice(
-    0,
-    12
-  )}…${hash.slice(-12)}`;
-}
-
 function humanize(value?: string) {
   if (!value) {
     return 'Not specified';
   }
 
- return value
-  .replace(/_/g, ' ')
-  .replace(/\b\w/g, (char) =>
-    char.toUpperCase()
-  );
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) =>
+      char.toUpperCase()
+    );
 }
 
 function RuleStatusIcon({
@@ -273,6 +217,109 @@ function RuleStatusIcon({
   );
 }
 
+/*
+ * ==================================================
+ * CONVERT HISTORICAL RESULT TO BACKEND SCAN RESULT
+ * ==================================================
+ *
+ * The historical inspection already contains the
+ * complete backend compliance result.
+ *
+ * We simply restore it into backendResult so the
+ * existing RequirementsScreen and
+ * ComplianceResultScreen can use it.
+ *
+ * No OCR, Gemini, or rule engine is executed again.
+ */
+function toBackendScanResult(
+  inspection: HistoricalInspection
+): BackendScanResult | null {
+  if (
+    !inspection.compliance_report ||
+    !Array.isArray(
+      inspection.compliance_report.results
+    )
+  ) {
+    return null;
+  }
+
+  const report =
+    inspection.compliance_report;
+
+  return {
+    inspection_id: inspection.id,
+
+    extracted_data:
+      inspection.extracted_data ?? {},
+
+    compliance_report: {
+      overall_status:
+        report.overall_status ??
+        inspection.overall_status ??
+        inspection.status ??
+        'VERIFICATION_REQUIRED',
+
+      total_rules_checked:
+        report.total_rules_checked ??
+        report.results.length,
+
+      passed:
+        report.passed ??
+        inspection.passed ??
+        report.results.filter(
+          (result) =>
+            result.status === 'PASS'
+        ).length,
+
+      failed:
+        report.failed ??
+        inspection.failed ??
+        report.results.filter(
+          (result) =>
+            result.status === 'FAIL'
+        ).length,
+
+      classification:
+        report.classification,
+
+      results:
+        report.results.map(
+          (result) => ({
+            rule_id:
+              result.rule_id ?? '',
+
+            description:
+              result.description ?? '',
+
+            legal_reference:
+              result.legal_reference ?? '',
+
+            field:
+              result.field ?? '',
+
+            status:
+              result.status ??
+              'NOT_APPLICABLE',
+
+            reason:
+              result.reason ?? '',
+
+            extracted_value:
+              result.extracted_value ??
+              result.evidence?.value ??
+              null,
+
+            verified_by_ocr:
+              result.verified_by_ocr ??
+              result.evidence
+                ?.verified_by_ocr ??
+              false,
+          })
+        ),
+    },
+  };
+}
+
 export default function ProductHistoryScreen() {
   const {
     navigate,
@@ -280,6 +327,8 @@ export default function ProductHistoryScreen() {
     historicalInspectionId,
     historicalInspection,
     setHistoricalInspection,
+    setBackendResult,
+    applyBackendResultToInspection,
   } = useApp();
 
   const [loading, setLoading] =
@@ -291,12 +340,37 @@ export default function ProductHistoryScreen() {
   const [error, setError] =
     useState('');
 
+  /*
+   * ==================================================
+   * LOAD HISTORICAL INSPECTION
+   * ==================================================
+   */
   useEffect(() => {
     if (!historicalInspectionId) {
       return;
     }
 
     if (historicalInspection) {
+      /*
+       * Historical data already exists.
+       * Make sure the application state is also
+       * restored when returning to this screen.
+       */
+      const restoredResult =
+        toBackendScanResult(
+          historicalInspection as HistoricalInspection
+        );
+
+      if (restoredResult) {
+        setBackendResult(
+          restoredResult
+        );
+
+        applyBackendResultToInspection(
+          restoredResult
+        );
+      }
+
       return;
     }
 
@@ -322,11 +396,48 @@ export default function ProductHistoryScreen() {
           const data: HistoricalInspection =
             await response.json();
 
-          if (!cancelled) {
-            setHistoricalInspection(
-              data as any
+          if (cancelled) {
+            return;
+          }
+
+          /*
+           * Store the historical inspection.
+           */
+          setHistoricalInspection(
+            data
+          );
+
+          /*
+           * Restore the stored backend
+           * compliance result.
+           */
+          const restoredResult =
+            toBackendScanResult(data);
+
+          if (!restoredResult) {
+            throw new Error(
+              'Historical inspection does not contain a valid compliance report.'
             );
           }
+
+          /*
+           * IMPORTANT:
+           *
+           * ComplianceResultScreen reads
+           * backendResult.
+           *
+           * RequirementsScreen reads
+           * currentInspection.
+           *
+           * Therefore both must be restored.
+           */
+          setBackendResult(
+            restoredResult
+          );
+
+          applyBackendResultToInspection(
+            restoredResult
+          );
         } catch (err) {
           console.error(
             'Failed to load historical inspection:',
@@ -354,6 +465,8 @@ export default function ProductHistoryScreen() {
     historicalInspectionId,
     historicalInspection,
     setHistoricalInspection,
+    setBackendResult,
+    applyBackendResultToInspection,
   ]);
 
   const inspection =

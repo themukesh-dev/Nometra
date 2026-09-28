@@ -79,6 +79,10 @@ export interface BackendHistoricalInspection {
 
   created_at?: string;
 
+  product_name?: string | null;
+
+  gemini_product_name?: string | null;
+
   overall_status:
     | 'COMPLIANT'
     | 'NON_COMPLIANT'
@@ -297,7 +301,7 @@ interface AppContextValue {
 
   inspectorDecisions: Record<
     string,
-    'CONFIRM'
+    | 'CONFIRM'
     | 'REJECT'
     | 'MODIFY'
     | 'REQUEST_EVIDENCE'
@@ -358,7 +362,8 @@ function calculateOverallStatus(
   if (
     findings.some(
       (finding) =>
-        finding.status === 'NON_COMPLIANT'
+        finding.status ===
+        'NON_COMPLIANT'
     )
   ) {
     return 'NON_COMPLIANT';
@@ -375,6 +380,50 @@ function calculateOverallStatus(
   }
 
   return 'COMPLIANT';
+}
+
+/*
+ * ==================================================
+ * EXTRACT VALUE FROM BACKEND DATA
+ *
+ * Gemini data may be:
+ *
+ * "Soap"
+ *
+ * OR
+ *
+ * {
+ *   value: "Soap",
+ *   source: "vision"
+ * }
+ * ==================================================
+ */
+
+function getBackendValue(
+  value: any
+): string {
+  if (
+    typeof value === 'string'
+  ) {
+    return value;
+  }
+
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof value.value === 'string'
+  ) {
+    return value.value;
+  }
+
+  if (
+    value !== null &&
+    value !== undefined
+  ) {
+    return String(value);
+  }
+
+  return '';
 }
 
 /*
@@ -458,7 +507,7 @@ export function AppProvider({
 
   const [
     historicalInspection,
-    setHistoricalInspection,
+    setHistoricalInspectionState,
   ] =
     useState<
       BackendHistoricalInspection | null
@@ -572,7 +621,7 @@ export function AppProvider({
 
     setHistoricalInspectionId(null);
 
-    setHistoricalInspection(null);
+    setHistoricalInspectionState(null);
 
     setAnalysisStep(0);
 
@@ -598,15 +647,10 @@ export function AppProvider({
 
     setHistoricalInspectionId(null);
 
-    setHistoricalInspection(null);
+    setHistoricalInspectionState(null);
 
     /*
      * Create new inspection.
-     *
-     * isImported and saleType are retained internally
-     * for compatibility with the existing Inspection type
-     * and historical UI. They are no longer selected by
-     * the inspector or sent as manual classification.
      */
 
     const inspection: Inspection = {
@@ -658,7 +702,7 @@ export function AppProvider({
     );
 
     /*
-     * Reset single image.
+     * Reset image.
      */
 
     setCapturedImage(null);
@@ -835,8 +879,7 @@ export function AppProvider({
               ];
 
             /*
-             * Ignore fields that do not
-             * have frontend requirement mapping.
+             * Ignore unsupported fields.
              */
 
             if (!requirement) {
@@ -894,9 +937,7 @@ export function AppProvider({
             }
 
             /*
-             * ---------------------------------------
-             * SINGLE IMAGE EVIDENCE
-             * ---------------------------------------
+             * Evidence.
              */
 
             evidence.push({
@@ -933,9 +974,7 @@ export function AppProvider({
             });
 
             /*
-             * ---------------------------------------
-             * FINDING STATUS
-             * ---------------------------------------
+             * Finding status.
              */
 
             let status:
@@ -957,9 +996,7 @@ export function AppProvider({
             }
 
             /*
-             * ---------------------------------------
-             * FINDING
-             * ---------------------------------------
+             * Finding.
              */
 
             findings.push({
@@ -1004,22 +1041,30 @@ export function AppProvider({
          * ==================================================
          * PRODUCT EXTRACTION
          * ==================================================
+         *
+         * Supports both:
+         *
+         * product_name: "Soap"
+         *
+         * and:
+         *
+         * product_name: {
+         *   value: "Soap"
+         * }
          */
 
         const productName =
-          typeof extracted.product_name ===
-            'string'
-            ? extracted.product_name
-            : typeof extracted.name ===
-                'string'
-              ? extracted.name
-              : '';
+          getBackendValue(
+            extracted.product_name
+          ) ||
+          getBackendValue(
+            extracted.name
+          );
 
         const manufacturerName =
-          typeof extracted.manufacturer_name ===
-            'string'
-            ? extracted.manufacturer_name
-            : '';
+          getBackendValue(
+            extracted.manufacturer_name
+          );
 
         /*
          * -------------------------------------------
@@ -1102,22 +1147,73 @@ export function AppProvider({
         setCurrentInspection(
           (
             previousInspection
-          ): Inspection | null => {
+          ): Inspection => {
             /*
-             * No active inspection.
+             * -----------------------------------------
+             * IMPORTANT HISTORICAL INSPECTION FIX
+             * -----------------------------------------
+             *
+             * Previously, historical inspections had
+             * no currentInspection, so this function
+             * returned null.
+             *
+             * Inspector Review and Report then had
+             * nothing to render.
+             *
+             * Now create a base Inspection when one
+             * does not already exist.
              */
 
-            if (!previousInspection) {
-              console.warn(
-                'Backend result received but no active inspection exists.'
-              );
+            const baseInspection:
+              Inspection =
+              previousInspection ?? {
+                id:
+                  `INS-HIST-${result.inspection_id}`,
 
-              return null;
-            }
+                createdAt:
+                  new Date().toISOString(),
+
+                inspectorId: '',
+
+                inspectorName: '',
+
+                location: '',
+
+                product: {
+                  id:
+                    `BACKEND-${result.inspection_id}`,
+
+                  name: '',
+
+                  brand: '',
+
+                  category: 'Other',
+
+                  isImported: false,
+
+                  saleType: 'retail',
+
+                  previousInspections: 0,
+                },
+
+                images: [],
+
+                evidence: [],
+
+                applicableRequirements: [],
+
+                findings: [],
+
+                inspectorDecisions: [],
+
+                overallStatus:
+                  'VERIFICATION_REQUIRED',
+
+                remarks: '',
+              };
 
             /*
-             * Calculate status from the
-             * actual findings.
+             * Calculate frontend status.
              */
 
             const overallStatus =
@@ -1126,58 +1222,61 @@ export function AppProvider({
               );
 
             /*
-             * Explicitly construct an Inspection.
+             * Backend classification.
+             */
+
+            const backendOrigin =
+              result.compliance_report
+                ?.classification
+                ?.origin;
+
+            const backendSaleType =
+              result.compliance_report
+                ?.classification
+                ?.sale_type;
+
+            /*
+             * Construct updated inspection.
              */
 
             const updatedInspection:
               Inspection = {
-              ...previousInspection,
+              ...baseInspection,
 
               product: {
-                ...previousInspection.product,
+                ...baseInspection.product,
 
                 name:
                   productName ||
-                  previousInspection.product
+                  baseInspection.product
                     .name,
 
                 brand:
                   manufacturerName ||
-                  previousInspection.product
+                  baseInspection.product
                     .brand,
 
-                /*
-                 * Backend classification is evidence-derived.
-                 * Keep legacy fields synchronized when the
-                 * backend provides classification information.
-                 */
-
                 isImported:
-                  result.compliance_report
-                    ?.classification
-                    ?.origin ===
+                  backendOrigin ===
                   'imported'
                     ? true
-                    : result.compliance_report
-                        ?.classification
-                        ?.origin ===
+                    : backendOrigin ===
                       'domestic'
                     ? false
-                    : previousInspection
-                        .product.isImported,
+                    : baseInspection
+                        .product
+                        .isImported,
 
                 saleType:
-                  result.compliance_report
-                    ?.classification
-                    ?.sale_type ===
+                  backendSaleType ===
                   'wholesale'
                     ? 'wholesale'
-                    : result.compliance_report
-                        ?.classification
-                        ?.sale_type ===
+                    : backendSaleType ===
                       'institutional_or_industrial'
                     ? 'institutional_or_industrial'
-                    : 'retail',
+                    : baseInspection
+                        .product
+                        .saleType,
               },
 
               evidence,
@@ -1194,6 +1293,173 @@ export function AppProvider({
         );
       },
       []
+    );
+
+  /*
+   * ==================================================
+   * CONVERT HISTORICAL DB RESULT
+   * ==================================================
+   *
+   * The backend stores an inspection in the database.
+   *
+   * The rest of the frontend expects BackendScanResult.
+   *
+   * This converts the stored result without rerunning
+   * any analysis.
+   * ==================================================
+   */
+
+  const historicalToBackendResult =
+    useCallback(
+      (
+        inspection:
+          BackendHistoricalInspection
+      ): BackendScanResult => {
+        const report =
+          inspection.compliance_report;
+
+        const historicalResults =
+          report?.results ?? [];
+
+        return {
+          inspection_id:
+            inspection.id,
+
+          extracted_data:
+            inspection.extracted_data ??
+            {},
+
+          compliance_report: {
+            overall_status:
+              report?.overall_status ??
+              inspection.overall_status ??
+              'VERIFICATION_REQUIRED',
+
+            total_rules_checked:
+              report?.total_rules_checked ??
+              historicalResults.length,
+
+            passed:
+              report?.passed ??
+              inspection.passed ??
+              0,
+
+            failed:
+              report?.failed ??
+              inspection.failed ??
+              0,
+
+            classification:
+              report?.classification,
+
+            results:
+              historicalResults.map(
+                (item) => ({
+                  rule_id:
+                    item.rule_id ??
+                    '',
+
+                  description:
+                    item.rule_id ??
+                    '',
+
+                  legal_reference:
+                    item.legal_reference ??
+                    '',
+
+                  field:
+                    item.field ??
+                    '',
+
+                  status:
+                    item.status ??
+                    'NOT_APPLICABLE',
+
+                  reason:
+                    item.reason ??
+                    '',
+
+                  extracted_value:
+                    item.evidence
+                      ?.value ??
+                    null,
+
+                  verified_by_ocr:
+                    item.evidence
+                      ?.verified_by_ocr ??
+                    item.verified_by_ocr ??
+                    false,
+                })
+              ),
+          },
+        };
+      },
+      []
+    );
+
+  /*
+   * ==================================================
+   * SET HISTORICAL INSPECTION
+   * ==================================================
+   *
+   * This is now more than a simple React setter.
+   *
+   * Whenever a historical inspection is loaded:
+   *
+   * 1. Store historical inspection.
+   * 2. Convert it to BackendScanResult.
+   * 3. Store backendResult.
+   * 4. Rebuild currentInspection.
+   *
+   * This fixes the blank Inspector Review / Report
+   * screens.
+   * ==================================================
+   */
+
+  const setHistoricalInspection =
+    useCallback(
+      (
+        inspection:
+          | BackendHistoricalInspection
+          | null
+      ) => {
+        setHistoricalInspectionState(
+          inspection
+        );
+
+        if (!inspection) {
+          return;
+        }
+
+        const restoredResult =
+          historicalToBackendResult(
+            inspection
+          );
+
+        /*
+         * Restore backend result.
+         */
+
+        setBackendResult(
+          restoredResult
+        );
+
+        /*
+         * Restore current inspection.
+         *
+         * This intentionally uses the stored
+         * database result and does NOT call
+         * Gemini/OCR/backend again.
+         */
+
+        applyBackendResultToInspection(
+          restoredResult
+        );
+      },
+      [
+        historicalToBackendResult,
+        applyBackendResultToInspection,
+      ]
     );
 
   /*
