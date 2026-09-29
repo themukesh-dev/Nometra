@@ -65,6 +65,7 @@ from database.inspections import (
     get_all_inspections,
     get_inspection_by_id,
     update_inspector_review,
+    delete_inspection,
 )
 
 from ingestion.image_quality import (
@@ -1004,13 +1005,6 @@ async def scan_label(
         # --------------------------------------------------
         # 8A. Preserve Gemini's original product name
         # --------------------------------------------------
-        #
-        # This value is captured BEFORE evidence fusion
-        # and BEFORE inspector review.
-        #
-        # It is stored separately so that an inspector's
-        # correction never overwrites Gemini's original
-        # extraction.
 
         gemini_product_name = None
 
@@ -1877,6 +1871,72 @@ async def get_inspection(
         )
 
     return inspection
+
+
+# ============================================================
+# DELETE INSPECTION
+# ============================================================
+
+@router.delete(
+    "/inspections/{inspection_id}"
+)
+async def delete_inspection_route(
+    inspection_id: int,
+):
+    """
+    Permanently deletes an existing inspection.
+
+    The frontend confirmation phrase is handled by the UI.
+    This endpoint performs the actual database deletion.
+    """
+
+    try:
+
+        deleted = delete_inspection(
+            inspection_id
+        )
+
+    except Exception as e:
+
+        print(
+            "DELETE INSPECTION ERROR:",
+            str(e),
+        )
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": (
+                    f"Failed to delete inspection "
+                    f"{inspection_id}: {str(e)}"
+                )
+            },
+        )
+
+    if not deleted:
+
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": (
+                    f"No inspection found with id "
+                    f"{inspection_id}"
+                )
+            },
+        )
+
+    print(
+        f"INSPECTION DELETED: {inspection_id}"
+    )
+
+    return {
+        "success": True,
+        "message": (
+            f"Inspection {inspection_id} "
+            "deleted successfully."
+        ),
+        "inspection_id": inspection_id,
+    }
 
 
 # ============================================================

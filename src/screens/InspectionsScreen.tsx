@@ -1,5 +1,16 @@
-import { Search, RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  Search,
+  RefreshCw,
+  Trash2,
+  X,
+} from 'lucide-react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type MouseEvent,
+} from 'react';
 import MobileShell from '../components/MobileShell';
 import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
@@ -7,15 +18,13 @@ import type { ComplianceStatus } from '../types';
 
 const API_BASE_URL = '/api';
 
+const DELETE_CONFIRMATION_TEXT = 'DELETE SCAN';
+
 type BackendInspection = {
   id: number;
   timestamp?: string;
   created_at?: string;
 
-  /*
-   * Product name returned directly by the
-   * inspection history API.
-   */
   product_name?: string | null;
 
   overall_status?:
@@ -31,10 +40,6 @@ type BackendInspection = {
   passed?: number;
   failed?: number;
 
-  /*
-   * Kept for compatibility with older
-   * inspection-history responses.
-   */
   extracted_data?: {
     product_name?: string | null;
     manufacturer_name?: string | null;
@@ -122,20 +127,8 @@ function normalizeInspection(
   return {
     id: String(inspection.id),
 
-    /*
-     * Keep the real numeric backend ID
-     * separately so historical inspection
-     * lookup can call /inspections/<id>.
-     */
     backendId: inspection.id,
 
-    /*
-     * The inspection-history backend now
-     * returns product_name directly.
-     *
-     * The extracted_data fallback is kept
-     * so older API responses remain compatible.
-     */
     productName:
       inspection.product_name ||
       inspection.extracted_data
@@ -204,6 +197,31 @@ export default function InspectionsScreen() {
     setError,
   ] = useState('');
 
+  /*
+   * Delete confirmation state.
+   */
+  const [
+    inspectionToDelete,
+    setInspectionToDelete,
+  ] = useState<InspectionRow | null>(
+    null
+  );
+
+  const [
+    deleteConfirmation,
+    setDeleteConfirmation,
+  ] = useState('');
+
+  const [
+    deleting,
+    setDeleting,
+  ] = useState(false);
+
+  const [
+    deleteError,
+    setDeleteError,
+  ] = useState('');
+
   const loadInspections =
     async () => {
       setLoading(true);
@@ -224,18 +242,6 @@ export default function InspectionsScreen() {
 
         const data =
           await response.json();
-
-        /*
-         * Backend currently returns:
-         *
-         * {
-         *   success: true,
-         *   inspections: [...]
-         * }
-         *
-         * This also safely handles a
-         * direct array response.
-         */
 
         const backendInspections:
           BackendInspection[] =
@@ -310,23 +316,158 @@ export default function InspectionsScreen() {
 
   const openHistoricalInspection =
     (inspection: InspectionRow) => {
-      /*
-       * Store the real backend inspection ID.
-       */
       setHistoricalInspectionId(
         inspection.backendId
       );
 
-      /*
-       * Clear any previously loaded
-       * historical record so the detail
-       * screen knows it must fetch fresh data.
-       */
       setHistoricalInspection(null);
 
       navigate(
         'product-history'
       );
+    };
+
+  /*
+   * Open delete confirmation modal.
+   */
+  const openDeleteModal =
+    (
+      event: MouseEvent,
+      inspection: InspectionRow
+    ) => {
+      event.stopPropagation();
+
+      setInspectionToDelete(
+        inspection
+      );
+
+      setDeleteConfirmation('');
+
+      setDeleteError('');
+    };
+
+  /*
+   * Close delete confirmation modal.
+   */
+  const closeDeleteModal = () => {
+    if (deleting) {
+      return;
+    }
+
+    setInspectionToDelete(null);
+
+    setDeleteConfirmation('');
+
+    setDeleteError('');
+  };
+
+  /*
+   * Permanently delete the inspection.
+   */
+  const deleteInspection =
+    async () => {
+      if (
+        !inspectionToDelete ||
+        deleteConfirmation !==
+          DELETE_CONFIRMATION_TEXT
+      ) {
+        return;
+      }
+
+      const deletingInspectionId =
+        inspectionToDelete.backendId;
+
+      setDeleting(true);
+
+      setDeleteError('');
+
+      try {
+        const response =
+          await fetch(
+            `${API_BASE_URL}/inspections/${deletingInspectionId}`,
+            {
+              method: 'DELETE',
+            }
+          );
+
+        let data: {
+          detail?: string;
+          message?: string;
+        } = {};
+
+        try {
+          data =
+            await response.json();
+        } catch {
+          /*
+           * Response may not contain JSON.
+           */
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            data.detail ||
+              data.message ||
+              `Failed to delete inspection (${response.status})`
+          );
+        }
+
+        /*
+         * Remove deleted inspection
+         * immediately from the local list.
+         */
+        setInspections(
+          (current) =>
+            current.filter(
+              (item) =>
+                item.backendId !==
+                deletingInspectionId
+            )
+        );
+
+        /*
+         * Clear historical state.
+         *
+         * This prevents the deleted inspection
+         * from remaining available in the
+         * frontend state.
+         */
+        setHistoricalInspectionId(
+          null
+        );
+
+        setHistoricalInspection(
+          null
+        );
+
+        /*
+         * IMPORTANT:
+         *
+         * Do NOT call closeDeleteModal()
+         * here because deleting is still true.
+         *
+         * Clear the modal state directly
+         * after successful deletion.
+         */
+        setInspectionToDelete(null);
+
+        setDeleteConfirmation('');
+
+        setDeleteError('');
+      } catch (err) {
+        console.error(
+          'Failed to delete inspection:',
+          err
+        );
+
+        setDeleteError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to delete inspection.'
+        );
+      } finally {
+        setDeleting(false);
+      }
     };
 
   const filters: {
@@ -493,67 +634,92 @@ export default function InspectionsScreen() {
                 (
                   inspection
                 ) => (
-                  <button
+                  <div
                     key={
                       inspection.id
                     }
-                    type="button"
-                    onClick={() =>
-                      openHistoricalInspection(
-                        inspection
-                      )
-                    }
-                    className="w-full text-left bg-white border border-slate-200 rounded-xl px-4 py-3.5 flex items-start justify-between hover:border-blue-300 hover:bg-slate-50 active:bg-slate-100 transition-colors"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3.5 hover:border-blue-300 hover:bg-slate-50 transition-colors"
                   >
-                    <div className="flex-1 min-w-0 mr-3">
-                      <p className="font-medium text-slate-900 text-sm truncate">
-                        {
-                          inspection.productName
+                    <div className="flex items-start justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openHistoricalInspection(
+                            inspection
+                          )
                         }
-                      </p>
-
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Legal Metrology Inspection
-                      </p>
-
-                      <p className="text-xs text-slate-400 mt-1 font-mono">
-                        #
-                        {
-                          inspection.id
-                        }{' '}
-                        ·{' '}
-                        {
-                          inspection.date
-                        }
-                      </p>
-
-                      <div className="flex gap-3 mt-1.5">
-                        <span className="text-[10px] text-emerald-600 font-medium">
+                        className="flex-1 min-w-0 text-left active:bg-slate-100 rounded-lg"
+                      >
+                        <p className="font-medium text-slate-900 text-sm truncate">
                           {
-                            inspection.passed
-                          }{' '}
-                          passed
-                        </span>
+                            inspection.productName
+                          }
+                        </p>
 
-                        {inspection.failed >
-                          0 && (
-                          <span className="text-[10px] text-red-600 font-medium">
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Legal Metrology Inspection
+                        </p>
+
+                        <p className="text-xs text-slate-400 mt-1 font-mono">
+                          #
+                          {
+                            inspection.id
+                          }{' '}
+                          ·{' '}
+                          {
+                            inspection.date
+                          }
+                        </p>
+
+                        <div className="flex gap-3 mt-1.5">
+                          <span className="text-[10px] text-emerald-600 font-medium">
                             {
-                              inspection.failed
+                              inspection.passed
                             }{' '}
-                            failed
+                            passed
                           </span>
-                        )}
+
+                          {inspection.failed >
+                            0 && (
+                            <span className="text-[10px] text-red-600 font-medium">
+                              {
+                                inspection.failed
+                              }{' '}
+                              failed
+                            </span>
+                          )}
+                        </div>
+                      </button>
+
+                      <div className="flex flex-col items-end gap-2 shrink-0">
+                        <StatusBadge
+                          status={
+                            inspection.status
+                          }
+                          size="sm"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={(
+                            event
+                          ) =>
+                            openDeleteModal(
+                              event,
+                              inspection
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-600 text-[10px] font-semibold hover:bg-red-100 hover:border-red-300 transition-colors"
+                        >
+                          <Trash2
+                            size={12}
+                          />
+
+                          Delete Scan
+                        </button>
                       </div>
                     </div>
-
-                    <StatusBadge
-                      status={
-                        inspection.status
-                      }
-                      size="sm"
-                    />
-                  </button>
+                  </div>
                 )
               )}
             </div>
@@ -591,6 +757,173 @@ export default function InspectionsScreen() {
             </div>
           )}
       </div>
+
+      {/* Delete confirmation modal */}
+
+      {inspectionToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              closeDeleteModal();
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-scan-title"
+            className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden"
+          >
+            {/* Modal header */}
+
+            <div className="flex items-start justify-between px-5 pt-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
+                  <AlertTriangle
+                    size={20}
+                    className="text-red-600"
+                  />
+                </div>
+
+                <div>
+                  <h2
+                    id="delete-scan-title"
+                    className="text-base font-semibold text-slate-900"
+                  >
+                    Delete Scan
+                  </h2>
+
+                  <p className="text-xs text-slate-500 mt-1">
+                    This action permanently
+                    deletes this inspection.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={
+                  closeDeleteModal
+                }
+                disabled={deleting}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Product being deleted */}
+
+            <div className="mx-5 mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">
+                Inspection
+              </p>
+
+              <p className="text-sm font-medium text-slate-900 mt-1 truncate">
+                {
+                  inspectionToDelete.productName
+                }
+              </p>
+
+              <p className="text-xs text-slate-500 mt-0.5 font-mono">
+                #
+                {
+                  inspectionToDelete.id
+                }
+              </p>
+            </div>
+
+            {/* Confirmation instruction */}
+
+            <div className="px-5 mt-5">
+              <p className="text-sm text-slate-700">
+                To permanently delete this
+                scan, type:
+              </p>
+
+              <div className="mt-2 rounded-lg bg-slate-100 border border-slate-200 px-3 py-2 text-center">
+                <code className="text-sm font-bold tracking-wider text-slate-900">
+                  {DELETE_CONFIRMATION_TEXT}
+                </code>
+              </div>
+
+              <input
+                type="text"
+                value={
+                  deleteConfirmation
+                }
+                onChange={(event) =>
+                  setDeleteConfirmation(
+                    event.target.value
+                  )
+                }
+                placeholder="Type DELETE SCAN"
+                autoFocus
+                disabled={deleting}
+                className="mt-3 w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-slate-100"
+              />
+
+              {deleteConfirmation &&
+                deleteConfirmation !==
+                  DELETE_CONFIRMATION_TEXT && (
+                  <p className="mt-2 text-xs text-red-600">
+                    Text does not match. Type
+                    exactly{' '}
+                    <span className="font-semibold">
+                      DELETE SCAN
+                    </span>
+                    .
+                  </p>
+                )}
+
+              {deleteError && (
+                <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+                  <p className="text-xs text-red-700">
+                    {deleteError}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Modal actions */}
+
+            <div className="flex gap-2 px-5 py-5 mt-1">
+              <button
+                type="button"
+                onClick={
+                  closeDeleteModal
+                }
+                disabled={deleting}
+                className="flex-1 h-10 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={
+                  deleteInspection
+                }
+                disabled={
+                  deleting ||
+                  deleteConfirmation !==
+                    DELETE_CONFIRMATION_TEXT
+                }
+                className="flex-1 h-10 rounded-xl bg-red-600 text-white text-xs font-semibold hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
+              >
+                {deleting
+                  ? 'Deleting…'
+                  : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </MobileShell>
   );
 }

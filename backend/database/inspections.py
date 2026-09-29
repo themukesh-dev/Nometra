@@ -424,6 +424,64 @@ def update_inspector_review(
 
 
 # ============================================================
+# DELETE INSPECTION
+# ============================================================
+
+def delete_inspection(
+    inspection_id: int,
+) -> bool:
+    """
+    Permanently delete one inspection from the database.
+
+    Returns:
+        True  -> inspection existed and was deleted
+        False -> no inspection with the given ID existed
+    """
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    try:
+
+        if _is_postgresql():
+
+            cursor.execute(
+                """
+                DELETE FROM inspections
+                WHERE id = %s
+                """,
+                (inspection_id,),
+            )
+
+        else:
+
+            cursor.execute(
+                """
+                DELETE FROM inspections
+                WHERE id = ?
+                """,
+                (inspection_id,),
+            )
+
+        deleted = cursor.rowcount > 0
+
+        conn.commit()
+
+        return deleted
+
+    except Exception:
+
+        conn.rollback()
+
+        raise
+
+    finally:
+
+        cursor.close()
+        conn.close()
+
+
+# ============================================================
 # GET ALL INSPECTIONS
 # ============================================================
 
